@@ -13,14 +13,12 @@ TEXT ·Sum(SB),NOSPLIT,$0-24
 
 TEXT ·SumN(SB),NOSPLIT,$0-16
 	MOVQ $0, AX
-	MOVQ $1, BX
+	MOVQ $0, BX
 	MOVQ n+0(FP), CX
 loop:
-	CMPQ BX, CX
-	JGT  done
 	ADDQ BX, AX
 	ADDQ $1, BX
-	JMP  loop
-done:
+	CMPQ BX, CX
+	JLS  loop
 	MOVQ AX, ret+8(FP)
 	RET
