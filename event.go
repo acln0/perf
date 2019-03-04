@@ -8,8 +8,11 @@ package perf
 import (
 	"errors"
 	"os"
+	"unsafe"
 
 	"golang.org/x/sys/unix"
+
+	"acln.ro/ioctl"
 )
 
 // Special Open and OpenGroup pid parameter values.
@@ -42,9 +45,18 @@ const (
 // TODO(acln): Do we add CLOEXEC to flags unconditionally? Should the documentation
 // mention that we do so?
 func Open(attr *EventAttr, pid int, cpu int, group *Event, flags int) (*Event, error) {
-	// if group is non-nil and flags contains PERF_FLAG_FD_OUTPUT,
-	// set group.isGroup.
-	panic("not implemented")
+	// TODO(acln): use group.fd
+	fd, err := unix.PerfEventOpen(attr.unixEventAttr(), pid, cpu, -1, flags)
+	if err != nil {
+		return nil, os.NewSyscallError("perf_event_open", err)
+	}
+	if err := unix.SetNonblock(fd, true); err != nil {
+		return nil, os.NewSyscallError("setnonblock", err)
+	}
+	return &Event{
+		intfd: fd,
+		fd:    os.NewFile(uintptr(fd), "perf"),
+	}, nil
 }
 
 // OpenGroup opens a group of events. The pid, cpu and flags arguments behave
@@ -88,6 +100,7 @@ type Counter interface {
 }
 
 type Event struct {
+	intfd    int                     // integer file descriptor
 	fd       *os.File                // event file descriptor
 	ring     []byte                  // memory mapped ring buffer
 	ringSize int                     // size of the ring in bytes, excluding meta page
@@ -96,34 +109,105 @@ type Event struct {
 	group    []*Event
 }
 
+// PERF_EVENT_IOC_* ioctls.
+var (
+	ioctlEnable = ioctl.N{
+		Name: "PERF_EVENT_IOC_ENABLE",
+		Type: '$',
+		Nr:   0,
+	}
+	ioctlDisable = ioctl.N{
+		Name: "PERF_EVENT_IOC_DISABLE",
+		Type: '$',
+		Nr:   1,
+	}
+	ioctlRefresh = ioctl.N{
+		Name: "PERF_EVENT_IOC_REFRESH",
+		Type: '$',
+		Nr:   2,
+	}
+	ioctlReset = ioctl.N{
+		Name: "PERF_EVENT_IOC_RESET",
+		Type: '$',
+		Nr:   3,
+	}
+	ioctlPeriod = ioctl.W{
+		Name: "PERF_EVENT_IOC_PERIOD",
+		Type: '$',
+		Nr:   4,
+	}
+	ioctlSetOutput = ioctl.N{
+		Name: "PERF_EVENT_IOC_SET_OUTPUT",
+		Type: '$',
+		Nr:   5,
+	}
+	ioctlSetFilter = ioctl.W{
+		Name: "PERF_EVENT_IOC_SET_FILTER",
+		Type: '$',
+		Nr:   6,
+	}
+	ioctlID = ioctl.R{
+		Name: "PERF_EVENT_IOC_ID",
+		Type: '$',
+		Nr:   7,
+	}
+	ioctlSetBPF = ioctl.W{
+		Name: "PERF_EVENT_IOC_SET_BPF",
+		Type: '$',
+		Nr:   8,
+	}
+	ioctlPauseOutput = ioctl.W{
+		Name: "PERF_EVENT_IOC_PAUSE_OUTPUT",
+		Type: '$',
+		Nr:   9,
+	}
+	ioctlQueryBPF = ioctl.WR{
+		Name: "PERF_EVENT_IOC_QUERY_BPF",
+		Type: '$',
+		Nr:   10,
+	}
+	ioctlModifyAttributes = ioctl.W{
+		Name: "PERF_EVENT_IOC_MODIFY_ATTRIBUTES",
+		Type: '$',
+		Nr:   11,
+	}
+)
+
 // Enable enables the event.
 func (ev *Event) Enable() error {
-	// ioctl(ev.fd, ...)
-	panic("not implemented")
+	_, err := ioctlEnable.Exec(int(ev.intfd))
+	return err
 }
 
 // Disable disables the event.
 func (ev *Event) Disable() error {
-	// ioctl(ev.fd, ...)
-	panic("not implemented")
+	_, err := ioctlDisable.Exec(int(ev.intfd))
+	return err
 }
 
-// Close closes the ev and any other events in its group.
-func (ev *Event) Close() error {
-	panic("not implemented")
+// Reset resets the counters associated with the event.
+func (ev *Event) Reset() error {
+	_, err := ioctlReset.Exec(int(ev.intfd))
+	return err
 }
 
 // TODO(acln): add remaining ioctls as methods on *Event.
+
+// Close closes the ev and any other events in its group.
+func (ev *Event) Close() error {
+	// TODO(acln): close the other ones as well.
+	return ev.fd.Close()
+}
 
 // Count is a measurement taken by an Event.
 //
 // TODO(acln): document which fields are set based on CountFormat.
 type Count struct {
-	Label       string
 	Value       uint64
 	TimeEnabled uint64
 	TimeRunning uint64
 	ID          uint64
+	Label       string
 }
 
 // GroupCount is a group of measurements taken by an Event group.
@@ -140,10 +224,15 @@ var errGroupEvent = errors.New("calling ReadCount on group Event")
 // ReadCount reads a single count. It returns an error if ev represents an
 // event group.
 func (ev *Event) ReadCount() (Count, error) {
-	if ev.isGroup {
-		return Count{}, errGroupEvent
+	// TODO(acln): check ev.isGroup
+
+	// TODO(acln): check what flags we have
+	var val uint64
+	b := (*[8]byte)(unsafe.Pointer(&val))[:]
+	if _, err := ev.fd.Read(b); err != nil {
+		return Count{}, err
 	}
-	panic("not implemented")
+	return Count{Value: val}, nil
 }
 
 var errSingleEvent = errors.New("calling ReadGroupCount on non-group Event")
@@ -230,20 +319,42 @@ type EventAttr struct {
 
 	// ClockID is the clock ID to use with samples, if Options.UseClockID
 	// is set.
-	ClockID uint32
+	ClockID int32
 
 	// SampleRegsInt is the set of register to dump for each sample.
 	// See asm/perf_regs.h for details.
 	SampleRegsInt uint64
 
 	// AuxWatermark is the watermark for the aux area.
-	AUXWatermark uint32
+	AuxWatermark uint32
 
 	// SampleMaxStack is the maximum number of frame pointers in a call
 	// chain. It should be < /proc/sys/kernel/perf_event_max_stack.
 	//
 	// TODO(acln): this field does not exist in unix.PerfEventAttr.
 	SampleMaxStack uint16
+}
+
+func (attr *EventAttr) unixEventAttr() *unix.PerfEventAttr {
+	return &unix.PerfEventAttr{
+		Type:               uint32(attr.Type),
+		Size:               uint32(unsafe.Sizeof(unix.PerfEventAttr{})),
+		Config:             attr.Config,
+		Sample:             attr.Sample,
+		Sample_type:        attr.RecordFormat.Marshal(),
+		Read_format:        attr.CountFormat.Marshal(),
+		Bits:               attr.Options.Marshal(),
+		Wakeup:             attr.Wakeup,
+		Bp_type:            attr.BreakpointType,
+		Ext1:               attr.Config1,
+		Ext2:               attr.Config2,
+		Branch_sample_type: uint64(attr.BranchSampleType),
+		Sample_regs_user:   attr.SampleRegsUser,
+		Sample_stack_user:  attr.SampleStackUser,
+		Clockid:            attr.ClockID,
+		Sample_regs_intr:   attr.SampleRegsInt,
+		Aux_watermark:      attr.AuxWatermark,
+	}
 }
 
 // EventType is the overall type of a performance event.

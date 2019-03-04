@@ -327,6 +327,40 @@ type EventOptions struct {
 	Namespaces             bool           // include namespaces data
 }
 
+func (opt EventOptions) Marshal() uint64 {
+	fields := []bool{
+		opt.Disabled,
+		opt.Inherit,
+		opt.Pinned,
+		opt.Exclusive,
+		opt.ExcludeUser,
+		opt.ExcludeKernel,
+		opt.ExcludeHypervisor,
+		opt.ExcludeIdle,
+		opt.Mmap,
+		opt.Comm,
+		opt.Freq,
+		opt.InheritStat,
+		opt.EnableOnExec,
+		opt.Task,
+		opt.Watermark,
+		false, false, // 2 bits for skid constraint, TODO
+		opt.MmapData,
+		opt.SampleIDAll,
+		opt.ExcludeHost,
+		opt.ExcludeGuest,
+		opt.ExcludeCallchainKernel,
+		opt.ExcludeCallchainUser,
+		opt.Mmap2,
+		opt.CommExec,
+		opt.UseClockID,
+		opt.ContextSwitch,
+		opt.WriteBackward,
+		opt.Namespaces,
+	}
+	return marshalBitwiseUint64(fields)
+}
+
 // SkidConstraint is an instruction pointer skid constraint.
 type SkidConstraint int
 
