@@ -27,9 +27,6 @@ func TestInstructionCount(t *testing.T) {
 	}
 	defer ev.Close()
 
-	a := 2
-	b := 3
-
 	if err := ev.Reset(); err != nil {
 		t.Fatalf("Reset: %v", err)
 	}
@@ -37,7 +34,7 @@ func TestInstructionCount(t *testing.T) {
 		t.Fatalf("Enable: %v", err)
 	}
 
-	res := testasm.Sum(a, b)
+	res := testasm.SumN(50000)
 
 	if err := ev.Disable(); err != nil {
 		t.Fatalf("Disable: %v", err)
