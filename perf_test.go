@@ -136,8 +136,17 @@ func TestTracepoint(t *testing.T) {
 
 	t.Logf("got count value %d", count.Value)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	_, err = r.ReadRecord(ctx)
-	t.Log(err)
+
+	errc := make(chan error)
+
+	go func() {
+		_, err := r.ReadRecord(ctx)
+		errc <- err
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+	t.Log(<-errc)
 }

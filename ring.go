@@ -21,8 +21,7 @@ type ring struct {
 	meta     *unix.PerfEventMmapPage // metadata page: at &mapping[0]
 	mapping  []byte                  // the memory mapping
 	n        uint                    // size of mapping is 1 + 2^n pages
-	prfd     int                     // read side pipe to poll together with fd
-	pwfd     int                     // write side of prfd, used to raise POLLIN
+	evfd     int                     // unblocks poll on rawfd
 	pollReq  chan pollReq            // sends poll requests to polling goroutine
 	pollResp chan pollResp           // receives poll results from polling goroutine
 }
@@ -47,16 +46,15 @@ func newRing(fd *os.File, n uint) (*ring, error) {
 	if mmaperr != nil {
 		return nil, err
 	}
-	var pipefds [2]int
-	if err := unix.Pipe2(pipefds[:], unix.O_NONBLOCK|unix.O_CLOEXEC); err != nil {
+	evfd, err := unix.Eventfd(0, unix.EFD_CLOEXEC|unix.EFD_NONBLOCK)
+	if err != nil {
 		return nil, err
 	}
 	r := &ring{
 		rawfd:    rawfd,
 		meta:     (*unix.PerfEventMmapPage)(unsafe.Pointer(&mapping[0])),
 		mapping:  mapping,
-		prfd:     pipefds[0],
-		pwfd:     pipefds[1],
+		evfd:     evfd,
 		pollReq:  make(chan pollReq),
 		pollResp: make(chan pollResp),
 	}
@@ -89,8 +87,9 @@ func (r *ring) ReadRecord(ctx context.Context) (Record, error) {
 		// POLLIN is raised on r.prfd.
 		err := ctx.Err()
 		if err == context.Canceled {
-			var buf [1]byte
-			unix.Write(r.pwfd, buf[:])
+			val := uint64(1)
+			buf := (*[8]byte)(unsafe.Pointer(&val))[:]
+			unix.Write(r.evfd, buf)
 		}
 		<-r.pollResp
 		return nil, err
@@ -132,7 +131,7 @@ func (r *ring) doPoll(req pollReq) pollResp {
 	}
 	var (
 		perfRevents int16
-		pipeRevents int16
+		evfdRevents int16
 		pollErr     error
 	)
 	err := r.rawfd.Control(func(fd uintptr) {
@@ -142,27 +141,24 @@ func (r *ring) doPoll(req pollReq) pollResp {
 				Events: unix.POLLIN,
 			},
 			{
-				Fd:     int32(r.prfd),
+				Fd:     int32(r.evfd),
 				Events: unix.POLLIN,
 			},
 		}
 		_, pollErr = unix.Ppoll(fds, timeout, nil)
 		perfRevents = fds[0].Revents
-		pipeRevents = fds[1].Revents
+		evfdRevents = fds[1].Revents
 	})
-	// If POLLIN was raised on r.prfd, drain the pipe. We can only ever
-	// read one byte from the pipe here, since we write at most one byte
-	// per call to doPoll from the other sied.
-	if pipeRevents&unix.POLLIN == 1 {
-		var buf [1]byte
-		unix.Read(r.prfd, buf[:])
+	// If POLLIN was raised on r.evfd, consume the event.
+	if evfdRevents&unix.POLLIN != 0 {
+		var buf [8]byte
+		unix.Read(r.evfd, buf[:])
 	}
 	if err != nil {
 		return pollResp{err: err}
 	}
 	return pollResp{
 		perfRevents: perfRevents,
-		pipeRevents: pipeRevents,
 		err:         pollErr,
 	}
 }
@@ -171,23 +167,14 @@ func (r *ring) destroy() {
 	close(r.pollReq)
 	<-r.pollResp
 	unix.Munmap(r.mapping)
-	unix.Close(r.prfd)
-	unix.Close(r.pwfd)
+	unix.Close(r.evfd)
 }
 
 type pollReq struct {
 	timeout time.Duration
 }
 
-func durationToTimespec(d time.Duration) unix.Timespec {
-	return unix.Timespec{
-		Sec:  int64(d / time.Second),
-		Nsec: int64(d - time.Second*(d/time.Second)),
-	}
-}
-
 type pollResp struct {
 	perfRevents int16
-	pipeRevents int16
 	err         error
 }
