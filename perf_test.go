@@ -6,12 +6,13 @@ package perf
 
 import (
 	"context"
-	"os/exec"
 	"runtime"
 	"testing"
 	"time"
 
 	"acln.ro/perf/internal/testasm"
+
+	"golang.org/x/sys/unix"
 )
 
 func TestInstructionCount(t *testing.T) {
@@ -50,47 +51,93 @@ func TestInstructionCount(t *testing.T) {
 	t.Logf("used %d instructions, got result %d", count.Value, res)
 }
 
-func TestRing(t *testing.T) {
-	attr := EventAttr{
-		Type:   HardwareEvent,
-		Config: uint64(CPUCycles),
-		Wakeup: 1,
-		Options: EventOptions{
-			Disabled:          true,
-			ExcludeKernel:     true,
-			ExcludeHypervisor: true,
-			Watermark:         true,
-			SampleIDAll:       true,
-		},
+func TestGroup(t *testing.T) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	insns := Instructions.EventAttr()
+	insns.CountFormat.Group = true
+	insns.Options.Disabled = true
+	insns.Options.ExcludeKernel = true
+	insns.Options.ExcludeHypervisor = true
+
+	cycles := CPUCycles.EventAttr()
+	cycles.Options.ExcludeKernel = true
+	cycles.Options.ExcludeHypervisor = true
+
+	iev, err := Open(insns, CallingThread, AnyCPU, nil, 0)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer iev.Close()
+
+	cev, err := Open(cycles, CallingThread, AnyCPU, iev, 0)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer cev.Close()
+
+	if err := iev.Reset(); err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+	if err := iev.Enable(); err != nil {
+		t.Fatalf("Enable: %v", err)
 	}
 
-	ev, err := Open(&attr, CallingThread, AnyCPU, nil, 0)
+	testasm.SumN(50000)
+
+	if err := iev.Disable(); err != nil {
+		t.Fatalf("Disable: %v", err)
+	}
+
+	counts, err := iev.ReadGroupCount()
+	if err != nil {
+		t.Fatalf("ReadGroupCount: %v", err)
+	}
+
+	t.Logf("%d instructions, %d CPU cycles", counts.Counts[0].Value, counts.Counts[1].Value)
+}
+
+func TestTracepoint(t *testing.T) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	attr, err := NewTracepoint("syscalls", "sys_enter_getpid")
+	if err != nil {
+		t.Fatalf("NewTracepoint: %v", err)
+	}
+
+	attr.RecordFormat.Identifier = true
+	attr.Options.Disabled = true
+	attr.Options.ExcludeGuest = true
+	attr.Options.EnableOnExec = true
+
+	ev, err := Open(attr, CallingThread, AnyCPU, nil, 0)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer ev.Close()
 
-	r, err := newRing(ev.fd, 1)
+	r, err := newRing(ev.fd, 128)
 	if err != nil {
 		t.Fatalf("newRing: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	errch := make(chan error)
-	go func() {
-		_, err = r.ReadRecord(ctx)
-		errch <- err
-	}()
-
-	_, err = exec.Command("echo", "something").Output()
-	if err != nil {
-		t.Fatalf("exec: %v", err)
+	if err := ev.Enable(); err != nil {
+		t.Fatalf("Enable: %v", err)
 	}
 
-	time.Sleep(1 * time.Second)
-	cancel()
-	err = <-errch
+	unix.Getpid()
+
+	count, err := ev.ReadCount()
+	if err != nil {
+		t.Fatalf("ReadCount: %v", err)
+	}
+
+	t.Logf("got count value %d", count.Value)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	_, err = r.ReadRecord(ctx)
 	t.Log(err)
 }

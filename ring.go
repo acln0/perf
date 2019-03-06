@@ -17,13 +17,14 @@ import (
 )
 
 type ring struct {
-	rawfd    syscall.RawConn
-	meta     *unix.PerfEventMmapPage
-	region   []byte
-	prfd     int
-	pwfd     int
-	pollReq  chan pollReq
-	pollResp chan pollResp
+	rawfd    syscall.RawConn         // raw file descriptor
+	meta     *unix.PerfEventMmapPage // metadata page: at &mapping[0]
+	mapping  []byte                  // the memory mapping
+	n        uint                    // size of mapping is 1 + 2^n pages
+	prfd     int                     // read side pipe to poll together with fd
+	pwfd     int                     // write side of prfd, used to raise POLLIN
+	pollReq  chan pollReq            // sends poll requests to polling goroutine
+	pollResp chan pollResp           // receives poll results from polling goroutine
 }
 
 const pageSize = 4096
@@ -35,10 +36,10 @@ func newRing(fd *os.File, n uint) (*ring, error) {
 		return nil, err
 	}
 	size := (1 + (1 << n)) * pageSize
-	var region []byte
+	var mapping []byte
 	var mmaperr error
 	err = rawfd.Control(func(fd uintptr) {
-		region, mmaperr = unix.Mmap(int(fd), 0, size, unix.PROT_READ, unix.MAP_SHARED)
+		mapping, mmaperr = unix.Mmap(int(fd), 0, size, unix.PROT_READ|unix.PROT_WRITE, unix.MAP_SHARED)
 	})
 	if err != nil {
 		return nil, err
@@ -52,8 +53,8 @@ func newRing(fd *os.File, n uint) (*ring, error) {
 	}
 	r := &ring{
 		rawfd:    rawfd,
-		meta:     (*unix.PerfEventMmapPage)(unsafe.Pointer(&region[0])),
-		region:   region,
+		meta:     (*unix.PerfEventMmapPage)(unsafe.Pointer(&mapping[0])),
+		mapping:  mapping,
 		prfd:     pipefds[0],
 		pwfd:     pipefds[1],
 		pollReq:  make(chan pollReq),
@@ -103,20 +104,11 @@ func (r *ring) ReadRecord(ctx context.Context) (Record, error) {
 }
 
 func (r *ring) readRecord() (Record, bool) {
-	version := atomic.LoadUint32(&r.meta.Version)
-	capabilities := atomic.LoadUint64(&r.meta.Capabilities)
+	base := r.meta.Data_offset
 	head := atomic.LoadUint64(&r.meta.Data_head)
 	tail := atomic.LoadUint64(&r.meta.Data_tail)
-	offset := atomic.LoadUint64(&r.meta.Data_offset)
-	size := atomic.LoadUint64(&r.meta.Data_offset)
 
-	fmt.Printf("version: %d\n", version)
-	fmt.Printf("capabilities: %08x\n", capabilities)
-	fmt.Printf("data head: %d\n", head)
-	fmt.Printf("data tail: %d\n", tail)
-	fmt.Printf("data offset: %d\n", offset)
-	fmt.Printf("data size: %d\n", size)
-
+	fmt.Printf("base: %d\nhead: %d\ntail: %d\n", base, head, tail)
 	return nil, false
 }
 
@@ -178,7 +170,7 @@ func (r *ring) doPoll(req pollReq) pollResp {
 func (r *ring) destroy() {
 	close(r.pollReq)
 	<-r.pollResp
-	unix.Munmap(r.region)
+	unix.Munmap(r.mapping)
 	unix.Close(r.prfd)
 	unix.Close(r.pwfd)
 }

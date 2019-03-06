@@ -8,7 +8,11 @@ package perf
 import (
 	"errors"
 	"io"
+	"io/ioutil"
 	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
@@ -16,89 +20,42 @@ import (
 	"acln.ro/ioctl"
 )
 
-// Special Open and OpenGroup pid parameter values.
 const (
-	// TODO(acln): document
+	// CallingThread configures the event to measure the calling thread.
 	CallingThread = 0
 
-	// TODO(acln): document
+	// AllThreads configures the event to measure all threads on the
+	// specified CPU.
 	AllThreads = -1
 )
 
-// Special Open and OpenGroup cpu parameter values.
+// AnyCPU configures the specified process/thread to be measured on any CPU.
+const AnyCPU = -1
+
+// OpenFlag is a set of flags for Open.
+type OpenFlag int
+
+// Flags for calls to Open.
 const (
-	// TODO(acln): document
-	AnyCPU = -1
+	// FlagNoGroup configures the event to ignore the group parameter
+	// except for the purpose of setting up output redirection using
+	// the FlagFDOutput flag.
+	FlagNoGroup OpenFlag = unix.PERF_FLAG_FD_NO_GROUP
+
+	// FlagFDOutput re-routes the event's sampled output to be included in the
+	// memory mapped buffer of the event specified by the group parameter.
+	FlagFDOutput OpenFlag = unix.PERF_FLAG_FD_OUTPUT
+
+	// FlagPidCGroup activates per-container system-wide monitoring. In this
+	// case, a file descriptor opened on /dev/group/<x> must be passed
+	// as the pid parameter. Consult the perf_event_open man page for
+	// more details.
+	FlagPidCGroup OpenFlag = unix.PERF_FLAG_PID_CGROUP
+
+	// flagCloexec configures the event file descriptor to be opened in
+	// close-on-exec mode.
+	flagCloexec OpenFlag = 1 << 3 // TODO(acln): missing PERF_FLAG_FD_CLOEXEC from x/sys/unix
 )
-
-// Open opens the event configured by attr. The pid and cpu specify which
-// process and CPU to monitor:
-//
-// TODO(acln): add paragraph about pid and cpu value combinations,
-// mention AnyCPU and CallingThread constants.
-//
-// If group is non-nil, the output (TODO: clarify) from the returned Event is
-// redirected to the group Event. If group is nil, the Event is created as a
-// group leader.
-//
-// TODO(acln): respect attr.Options.Disabled settings, document that we do
-//
-// TODO(acln): Do we add CLOEXEC to flags unconditionally? Should the documentation
-// mention that we do so?
-func Open(attr *EventAttr, pid int, cpu int, group *Event, flags int) (*Event, error) {
-	// TODO(acln): use group.fd
-	fd, err := unix.PerfEventOpen(attr.unixEventAttr(), pid, cpu, -1, flags)
-	if err != nil {
-		return nil, os.NewSyscallError("perf_event_open", err)
-	}
-	if err := unix.SetNonblock(fd, true); err != nil {
-		return nil, os.NewSyscallError("setnonblock", err)
-	}
-	return &Event{
-		intfd: fd,
-		fd:    os.NewFile(uintptr(fd), "perf"),
-	}, nil
-}
-
-// OpenGroup opens a group of events. The pid, cpu and flags arguments behave
-// as described in the Open documentation.
-//
-// The returned event group is disabled by default, and the Options.Disabled
-// flag is ignored for all EventAttrs added to g.
-//
-// TODO(acln): document that we do PERF_FLAG_FD_OUTPUT.
-func OpenGroup(g *EventGroup, pid int, cpu int, flags int) (*Event, error) {
-	panic("not implemented")
-}
-
-// An EventGroup configures a group of related events.
-// The zero value of EventGroup is an empty group.
-type EventGroup struct {
-	events []*EventAttr
-	labels []string
-	// etc.
-}
-
-// AddCounter adds a set of counters to the event group.
-func (g *EventGroup) AddCounter(counters ...Counter) {
-	for _, counter := range counters {
-		g.AddEvent(counter.Label(), counter.EventAttr())
-	}
-	// maybe we need to set some flags here, investigate
-	panic("not implemented")
-}
-
-// AddEvent adds the specified event to the group. The label need not be unique
-// and may be empty.
-func (g *EventGroup) AddEvent(label string, attr *EventAttr) {
-	panic("not implemented")
-}
-
-// A Counter configures
-type Counter interface {
-	Label() string
-	EventAttr() *EventAttr
-}
 
 type Event struct {
 	intfd    int                     // integer file descriptor
@@ -106,8 +63,59 @@ type Event struct {
 	ring     []byte                  // memory mapped ring buffer
 	ringSize int                     // size of the ring in bytes, excluding meta page
 	meta     *unix.PerfEventMmapPage // metadata page: &ring[0]
-	isGroup  bool
 	group    []*Event
+}
+
+// Open opens the event configured by attr.
+//
+// The pid and cpu parameters specify which thread and CPU to monitor:
+//
+//     * if pid == CallingThread and cpu == AnyCPU, the event measures
+//       the calling thread on any CPU
+//
+//     * if pid == CallingThread and cpu >= 0, the event measures
+//       the calling thread only when running on the specified CPU
+//
+//     * if pid > 0 and cpu == AnyCPU, the event measures the specified
+//       thread on any CPU
+//
+//     * if pid > 0 and cpu >= 0, the event measures the specified thread
+//       only when running on the specified CPU
+//
+//     * if pid == AllThreads and cpu >= 0, the event measures all threads
+//       on the specified CPU
+//
+//     * finally, the pid == AllThreads and cpu == AnyCPU setting is invalid
+//
+// If group is non-nil, the returned Event is made part of the group
+// associated with the specified group Event. If group is non-nil, and
+// FlagNoGroup | FlagFDOutput are not set, the attr.Options.Disabled setting
+// is ignored: the group leader controls when the entire group is enabled.
+//
+//
+func Open(attr *EventAttr, pid int, cpu int, group *Event, flags OpenFlag) (*Event, error) {
+	groupfd := -1
+	if group != nil {
+		// TODO(acln): do better than this
+		groupfd = group.intfd
+	}
+	flags |= flagCloexec
+	fd, err := unix.PerfEventOpen(attr.sysAttr(), pid, cpu, groupfd, int(flags))
+	if err != nil {
+		return nil, os.NewSyscallError("perf_event_open", err)
+	}
+	if err := unix.SetNonblock(fd, true); err != nil {
+		return nil, os.NewSyscallError("setnonblock", err)
+	}
+	ev := &Event{
+		intfd: fd,
+		fd:    os.NewFile(uintptr(fd), "perf"),
+	}
+	ev.group = append(ev.group, ev)
+	if group != nil {
+		group.group = append(group.group, ev)
+	}
+	return ev, nil
 }
 
 // PERF_EVENT_IOC_* ioctls.
@@ -200,27 +208,6 @@ func (ev *Event) Close() error {
 	return ev.fd.Close()
 }
 
-// Count is a measurement taken by an Event.
-//
-// TODO(acln): document which fields are set based on CountFormat.
-type Count struct {
-	Value       uint64
-	TimeEnabled uint64
-	TimeRunning uint64
-	ID          uint64
-
-	Label string
-}
-
-// GroupCount is a group of measurements taken by an Event group.
-//
-// TODO(acln): document which fields are set based on CountFormat.
-type GroupCount struct {
-	TimeEnabled uint64
-	TimeRunning uint64
-	Counts      []Count
-}
-
 var errGroupEvent = errors.New("calling ReadCount on group Event")
 
 // ReadCount reads a single count. It returns an error if ev represents an
@@ -242,10 +229,22 @@ var errSingleEvent = errors.New("calling ReadGroupCount on non-group Event")
 // ReadGroupCount reads the counts associated with ev. It returns an error
 // if ev does not represent an event group.
 func (ev *Event) ReadGroupCount() (GroupCount, error) {
-	if !ev.isGroup {
+	if len(ev.group) == 0 {
 		return GroupCount{}, errSingleEvent
 	}
-	panic("not implemented")
+	// TODO: check CountFormat, don't hard code this
+	values := make([]uint64, 1+len(ev.group))
+	base := unsafe.Pointer(&values[0])
+	nbytes := 8 * len(values)
+	b := (*[1 << 30]byte)(base)[:nbytes]
+	if _, err := ev.fd.Read(b); err != nil {
+		return GroupCount{}, err
+	}
+	var counts []Count
+	for _, val := range values[1:] {
+		counts = append(counts, Count{Value: val})
+	}
+	return GroupCount{Counts: counts}, nil
 }
 
 // ReadRecord reads and decodes a record from the memory mapped ring buffer
@@ -258,6 +257,59 @@ func (ev *Event) ReadRecord() (Record, error) {
 // associated with ev.
 func (ev *Event) ReadRawRecord(raw *RawRecord) error {
 	panic("not implemented")
+}
+
+// An EventGroup configures a group of related events.
+// The zero value of EventGroup is an empty group.
+type EventGroup struct {
+	events []*EventAttr
+	labels []string
+	// etc.
+}
+
+func (g *EventGroup) Open(pid int, cpu int, flags OpenFlag) (*Event, error) {
+	panic("not implemented")
+}
+
+// AddCounter adds a set of counters to the event group.
+func (g *EventGroup) AddCounter(counters ...Counter) {
+	for _, counter := range counters {
+		g.AddEvent(counter.Label(), counter.EventAttr())
+	}
+	// maybe we need to set some flags here, investigate
+	panic("not implemented")
+}
+
+// AddEvent adds the specified event to the group. The label need not be unique
+// and may be empty.
+func (g *EventGroup) AddEvent(label string, attr *EventAttr) {
+	panic("not implemented")
+}
+
+type Counter interface {
+	Label() string
+	EventAttr() *EventAttr
+}
+
+// Count is a measurement taken by an Event.
+//
+// TODO(acln): document which fields are set based on CountFormat.
+type Count struct {
+	Value       uint64
+	TimeEnabled uint64
+	TimeRunning uint64
+	ID          uint64
+
+	Label string
+}
+
+// GroupCount is a group of measurements taken by an Event group.
+//
+// TODO(acln): document which fields are set based on CountFormat.
+type GroupCount struct {
+	TimeEnabled uint64
+	TimeRunning uint64
+	Counts      []Count
 }
 
 // EventAttr configures a perf event.
@@ -337,7 +389,7 @@ type EventAttr struct {
 	SampleMaxStack uint16
 }
 
-func (attr *EventAttr) unixEventAttr() *unix.PerfEventAttr {
+func (attr *EventAttr) sysAttr() *unix.PerfEventAttr {
 	return &unix.PerfEventAttr{
 		Type:               uint32(attr.Type),
 		Size:               uint32(unsafe.Sizeof(unix.PerfEventAttr{})),
@@ -553,7 +605,20 @@ func HardwareCacheCounters(caches []Cache, ops []CacheOp, results []CacheOpResul
 // event, and returns an *EventAttr with the Type and Config fields set
 // to the appropriate values.
 func NewTracepoint(category string, event string) (*EventAttr, error) {
-	panic("not implemented")
+	f := filepath.Join("/sys/kernel/debug/tracing/events", category, event, "id")
+	content, err := ioutil.ReadFile(f)
+	if err != nil {
+		return nil, err
+	}
+	nr := strings.TrimSpace(string(content)) // remove trailing newline
+	config, err := strconv.ParseUint(nr, 10, 64)
+	if err != nil {
+		return nil, err
+	}
+	return &EventAttr{
+		Type:   TracepointEvent,
+		Config: config,
+	}, nil
 }
 
 // NewBreakpoint returns an EventAttr configured to record breakpoint events.
