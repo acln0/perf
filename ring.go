@@ -5,6 +5,7 @@
 package perf
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -62,6 +63,11 @@ func newRing(fd *os.File, n uint) (*ring, error) {
 	return r, nil
 }
 
+var (
+	evfd1              = uint64(1)
+	nativeEndian1Bytes = (*[8]byte)(unsafe.Pointer(&evfd1))[:]
+)
+
 func (r *ring) ReadRecord(ctx context.Context) (Record, error) {
 	rec, ok := r.readRecord()
 	if ok {
@@ -83,13 +89,11 @@ func (r *ring) ReadRecord(ctx context.Context) (Record, error) {
 		// for our call to ppoll(2) to be aware of timeouts.
 		//
 		// If, instead, the context was canceled, then we need to
-		// take active action. Write one byte to the pipe so that
-		// POLLIN is raised on r.prfd.
+		// take active action. Raise POLLIN on r.evfd by setting the
+		// value to 1.
 		err := ctx.Err()
 		if err == context.Canceled {
-			val := uint64(1)
-			buf := (*[8]byte)(unsafe.Pointer(&val))[:]
-			unix.Write(r.evfd, buf)
+			unix.Write(r.evfd, nativeEndian1Bytes)
 		}
 		<-r.pollResp
 		return nil, err
@@ -153,6 +157,9 @@ func (r *ring) doPoll(req pollReq) pollResp {
 	if evfdRevents&unix.POLLIN != 0 {
 		var buf [8]byte
 		unix.Read(r.evfd, buf[:])
+		if !bytes.Equal(buf[:], nativeEndian1Bytes) {
+			panic("internal error: inconsistent eventfd state")
+		}
 	}
 	if err != nil {
 		return pollResp{err: err}
