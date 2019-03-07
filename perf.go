@@ -1191,7 +1191,3 @@ func marshalBitwiseUint64(fields []bool) uint64 {
 	}
 	return res
 }
-
-func panicf(format string, args ...interface{}) {
-
-}
