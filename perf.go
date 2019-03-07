@@ -17,9 +17,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 	"unsafe"
 
@@ -64,12 +62,11 @@ const (
 )
 
 type Event struct {
-	// fd is the event file descriptor
-	fd *os.File
+	// closed is set to 1 when the Event is closed.
+	closed int32
 
-	// sysfd is the raw event file descriptor: it is derived from
-	// fd at initialization time and shares fd's lifetime.
-	sysfd syscall.RawConn
+	// fd is the event file descriptor.
+	fd int
 
 	// group holds other events in the event group, if this event is an
 	// event group leader.
@@ -90,13 +87,6 @@ type Event struct {
 	// evfd is an event file descriptor (see eventfd(2)): it is used to
 	// unblock calls to ppoll(2) on sysfd.
 	evfd int
-
-	// initPollOnce protects the lazy initialization of the poll goroutine
-	// associated, with the ring, as well as the following fields.
-	initPollOnce sync.Once
-
-	// polling tells us if there is a poll goroutine active for the event.
-	polling bool
 
 	// pollreq communicates requests from ReadRecord to the poll goroutine
 	// associated with the ring. The values represent timeouts; zero
@@ -138,100 +128,84 @@ const numRingPages = 128 // like the perf tool
 func Open(attr EventAttr, pid int, cpu int, group *Event, flags OpenFlag) (*Event, error) {
 	groupfd := -1
 	if group != nil {
-		err := group.sysfd.Control(func(fd uintptr) {
-			groupfd = int(fd)
-		})
-		if err != nil {
-			return nil, err // TODO(acln): do better than this
-		}
+		groupfd = group.fd
 	}
 	flags |= flagCloexec
-	rawfd, err := unix.PerfEventOpen(attr.sysAttr(), pid, cpu, groupfd, int(flags))
+	fd, err := unix.PerfEventOpen(attr.sysAttr(), pid, cpu, groupfd, int(flags))
 	if err != nil {
 		return nil, os.NewSyscallError("perf_event_open", err)
 	}
-	if err := unix.SetNonblock(rawfd, true); err != nil {
+	if err := unix.SetNonblock(fd, true); err != nil {
+		unix.Close(fd)
 		return nil, os.NewSyscallError("setnonblock", err)
 	}
-	fd := os.NewFile(uintptr(rawfd), "perf")
-	sysfd, err := fd.SyscallConn()
-	if err != nil {
-		return nil, err
-	}
 	size := (1 + numRingPages) * unix.Getpagesize()
-	var ring []byte
-	var mmaperr error
-	err = sysfd.Control(func(fd uintptr) {
-		const prot = unix.PROT_READ | unix.PROT_WRITE
-		const flags = unix.MAP_SHARED
-		ring, mmaperr = unix.Mmap(int(fd), 0, size, prot, flags)
-	})
+	ring, err := unix.Mmap(fd, 0, size, unix.PROT_READ|unix.PROT_WRITE, unix.MAP_SHARED)
 	if err != nil {
-		return nil, err
-	}
-	if mmaperr != nil {
-		return nil, err
+		unix.Close(fd)
+		return nil, os.NewSyscallError("mmap", err)
 	}
 	meta := (*unix.PerfEventMmapPage)(unsafe.Pointer(&ring[0]))
 	ringdata := ring[meta.Data_offset:]
 	evfd, err := unix.Eventfd(0, unix.EFD_CLOEXEC|unix.EFD_NONBLOCK)
 	if err != nil {
-		return nil, err
+		unix.Close(fd)
+		return nil, os.NewSyscallError("eventfd", err)
 	}
 	ev := &Event{
 		fd:       fd,
-		sysfd:    sysfd,
 		attr:     attr,
 		ring:     ring,
 		ringdata: ringdata,
 		meta:     meta,
 		evfd:     evfd,
+		pollreq:  make(chan time.Duration),
+		pollresp: make(chan pollresp),
 	}
 	if group != nil {
 		group.group = append(group.group, ev)
 	}
+	go ev.poll() // TODO(acln): start this lazily somehow?
 	return ev, nil
+}
+
+func (ev *Event) ok() error {
+	if ev == nil {
+		return os.ErrInvalid
+	}
+	if atomic.LoadInt32(&ev.closed) != 0 {
+		return os.ErrClosed
+	}
+	return nil
 }
 
 // Enable enables the event.
 func (ev *Event) Enable() error {
-	var ioctlErr error
-	err := ev.sysfd.Control(func(fd uintptr) {
-		ioctlErr = ioctlEnable(int(fd))
-	})
-	if err != nil {
+	if err := ev.ok(); err != nil {
 		return err
 	}
-	return ioctlErr
+	return ioctlEnable(ev.fd)
 }
 
 // Disable disables the event.
 func (ev *Event) Disable() error {
-	var ioctlErr error
-	err := ev.sysfd.Control(func(fd uintptr) {
-		ioctlErr = ioctlDisable(int(fd))
-	})
-	if err != nil {
+	if err := ev.ok(); err != nil {
 		return err
 	}
-	return ioctlErr
+	return ioctlDisable(ev.fd)
 }
 
 // Reset resets the counters associated with the event.
 func (ev *Event) Reset() error {
-	var ioctlErr error
-	err := ev.sysfd.Control(func(fd uintptr) {
-		ioctlErr = ioctlReset(int(fd))
-	})
-	if err != nil {
+	if err := ev.ok(); err != nil {
 		return err
 	}
-	return ioctlErr
+	return ioctlReset(ev.fd)
 }
 
 // TODO(acln): add remaining ioctls as methods on *Event.
 
-var errGroupEvent = errors.New("calling ReadCount on group Event")
+// TODO(acln): scrap all of the following and just use unsafe to read?
 
 var isLittleEndian bool
 
@@ -250,18 +224,23 @@ func nativeEndianUint64(b []byte) uint64 {
 	return binary.BigEndian.Uint64(b)
 }
 
+var errGroupEvent = errors.New("calling ReadCount on group Event")
+
 // ReadCount reads a single count. If the Event was configured with
 // ReadFormat.Group, ReadCount returns an error.
 func (ev *Event) ReadCount() (Count, error) {
 	var c Count
+	if err := ev.ok(); err != nil {
+		return c, err
+	}
 	if ev.attr.ReadFormat.Group {
 		return c, errGroupEvent
 	}
 	// TODO(acln): use rdpmc on x86 instead of read(2)?
 	buf := make([]byte, ev.attr.ReadFormat.readSize())
-	_, err := ev.fd.Read(buf)
+	_, err := unix.Read(ev.fd, buf)
 	if err != nil {
-		return c, err
+		return c, os.NewSyscallError("read", err)
 	}
 	nextField := func() uint64 {
 		val := nativeEndianUint64(buf)
@@ -289,15 +268,18 @@ var errSingleEvent = errors.New("calling ReadGroupCount on non-group Event")
 // returns an error.
 func (ev *Event) ReadGroupCount() (GroupCount, error) {
 	var gc GroupCount
+	if err := ev.ok(); err != nil {
+		return gc, err
+	}
 	if !ev.attr.ReadFormat.Group {
 		return gc, errSingleEvent
 	}
 	headerSize := ev.attr.ReadFormat.groupReadHeaderSize()
 	countsSize := (1 + len(ev.group)) * ev.attr.ReadFormat.groupReadCountSize()
 	buf := make([]byte, headerSize+countsSize)
-	_, err := ev.fd.Read(buf)
+	_, err := unix.Read(ev.fd, buf)
 	if err != nil {
-		return gc, err
+		return gc, os.NewSyscallError("read", err)
 	}
 	nextField := func() uint64 {
 		val := nativeEndianUint64(buf)
@@ -327,7 +309,9 @@ func (ev *Event) ReadGroupCount() (GroupCount, error) {
 // ReadRecord reads and decodes a record from the memory mapped ring buffer
 // associated with ev.
 func (ev *Event) ReadRecord(ctx context.Context) (Record, error) {
-	ev.initPollOnce.Do(ev.initpoll)
+	if err := ev.ok(); err != nil {
+		return nil, err
+	}
 
 	rec, ok := ev.readRecord()
 	if ok {
@@ -356,7 +340,10 @@ func (ev *Event) ReadRecord(ctx context.Context) (Record, error) {
 		}
 		resp := <-ev.pollresp
 		if wroteEvent && !resp.sawEvent {
-			ev.drainEvent()
+			if err := ev.drainEvent(); err != nil {
+				err = fmt.Errorf("internal error: bad eventfd state: got %v on read", err)
+				panic(err)
+			}
 		}
 		return nil, err
 	case resp := <-ev.pollresp:
@@ -385,13 +372,6 @@ func (ev *Event) ReadRawRecord(raw *RawRecord) error {
 	panic("not implemented")
 }
 
-func (ev *Event) initpoll() {
-	ev.polling = true
-	ev.pollreq = make(chan time.Duration)
-	ev.pollresp = make(chan pollresp)
-	go ev.poll()
-}
-
 func (ev *Event) poll() {
 	defer close(ev.pollresp)
 
@@ -410,34 +390,17 @@ func (ev *Event) doPoll(timeout time.Duration) pollresp {
 			Nsec: int64(nsec),
 		}
 	}
-	var (
-		perfRevents int16
-		pollErr     error
-	)
-	ctlErr := ev.sysfd.Control(func(fd uintptr) {
-		fds := []unix.PollFd{
-			{
-				Fd:     int32(fd),
-				Events: unix.POLLIN,
-			},
-			{
-				Fd:     int32(ev.evfd),
-				Events: unix.POLLIN,
-			},
-		}
-		_, pollErr = unix.Ppoll(fds, systimeout, nil)
-		perfRevents = fds[0].Revents
-	})
-	_ = perfRevents // TODO(acln): check these
+	pollfds := []unix.PollFd{
+		{Fd: int32(ev.fd), Events: unix.POLLIN},
+		{Fd: int32(ev.evfd), Events: unix.POLLIN},
+	}
+	_, err := unix.Ppoll(pollfds, systimeout, nil)
+	// TODO(acln): check revents
 	sawEvent := false
-	evfdErr := ev.drainEvent()
-	if evfdErr == nil {
+	if evfdErr := ev.drainEvent(); evfdErr == nil {
 		sawEvent = true
 	}
-	if ctlErr != nil {
-		return pollresp{sawEvent: sawEvent, err: ctlErr}
-	}
-	return pollresp{sawEvent: sawEvent, err: pollErr}
+	return pollresp{sawEvent: sawEvent, err: err}
 }
 
 var (
@@ -449,7 +412,8 @@ func (ev *Event) drainEvent() error {
 	var buf [8]byte
 	_, err := unix.Read(ev.evfd, buf[:])
 	if err == nil && !bytes.Equal(buf[:], nativeEndian1Bytes) {
-		panic("internal error: inconsistent eventfd state")
+		err = fmt.Errorf("internal error: bad eventfd state: read %x, want 1", buf)
+		panic(err)
 	}
 	return err
 }
@@ -457,17 +421,12 @@ func (ev *Event) drainEvent() error {
 // Close closes the event. Close must not be called concurrently with any
 // other methods on the Event.
 func (ev *Event) Close() error {
-	// ev.polling is set from (*Event).initpoll, which is called
-	// from (*Event).ReadRecord. Since we forbid concurrent calls to
-	// ReadRecord and Close, reading it here without synchronization
-	// is fine.
-	if ev.polling {
-		close(ev.pollreq)
-		<-ev.pollresp
-	}
+	atomic.StoreInt32(&ev.closed, 1)
+	close(ev.pollreq)
+	<-ev.pollresp
 	unix.Munmap(ev.ring)
 	unix.Close(ev.evfd)
-	return ev.fd.Close()
+	return unix.Close(ev.fd)
 }
 
 type pollresp struct {
@@ -1213,4 +1172,8 @@ func marshalBitwiseUint64(fields []bool) uint64 {
 		}
 	}
 	return res
+}
+
+func panicf(format string, args ...interface{}) {
+
 }
