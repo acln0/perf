@@ -23,7 +23,7 @@ type ring struct {
 	mapping  []byte                  // the memory mapping
 	n        uint                    // size of mapping is 1 + 2^n pages
 	evfd     int                     // unblocks poll on rawfd
-	pollReq  chan pollReq            // sends poll requests to polling goroutine
+	pollReq  chan time.Duration      // sends poll requests to polling goroutine
 	pollResp chan pollResp           // receives poll results from polling goroutine
 }
 
@@ -54,7 +54,7 @@ func newRing(fd *os.File, n uint) (*ring, error) {
 		meta:     (*unix.PerfEventMmapPage)(unsafe.Pointer(&mapping[0])),
 		mapping:  mapping,
 		evfd:     evfd,
-		pollReq:  make(chan pollReq),
+		pollReq:  make(chan time.Duration),
 		pollResp: make(chan pollResp),
 	}
 	go r.poll()
@@ -76,24 +76,26 @@ func (r *ring) ReadRecord(ctx context.Context) (Record, error) {
 	deadline, ok := ctx.Deadline()
 	if ok {
 		timeout = deadline.Sub(time.Now())
+		if timeout <= 0 {
+			timeout = 1
+		}
 	}
 
-	r.pollReq <- pollReq{timeout: timeout}
+	r.pollReq <- timeout
 
 	select {
 	case <-ctx.Done():
-		// If the context hit a deadline, we do nothing here: the
-		// polling goroutine will wake up very soon, since we arranged
-		// for our call to ppoll(2) to be aware of timeouts.
-		//
-		// If, instead, the context was canceled, then we need to
-		// take active action. Raise POLLIN on r.evfd by setting the
-		// value to 1.
+		// TODO(acln): document the wroteEvent + sawEvent machinery
+		wroteEvent := false
 		err := ctx.Err()
 		if err == context.Canceled {
 			unix.Write(r.evfd, nativeEndian1Bytes)
+			wroteEvent = true
 		}
-		<-r.pollResp
+		resp := <-r.pollResp
+		if wroteEvent && !resp.sawEvent {
+			r.drainEvent()
+		}
 		return nil, err
 	case resp := <-r.pollResp:
 		if resp.err != nil {
@@ -116,27 +118,26 @@ func (r *ring) readRecord() (Record, bool) {
 func (r *ring) poll() {
 	defer close(r.pollResp)
 
-	for req := range r.pollReq {
-		r.pollResp <- r.doPoll(req)
+	for timeout := range r.pollReq {
+		r.pollResp <- r.doPoll(timeout)
 	}
 }
 
-func (r *ring) doPoll(req pollReq) pollResp {
-	var timeout *unix.Timespec
-	if req.timeout > 0 {
-		sec := req.timeout / time.Second
-		nsec := req.timeout - time.Second*sec
-		timeout = &unix.Timespec{
+func (r *ring) doPoll(timeout time.Duration) pollResp {
+	var systimeout *unix.Timespec
+	if timeout > 0 {
+		sec := timeout / time.Second
+		nsec := timeout - sec*time.Second
+		systimeout = &unix.Timespec{
 			Sec:  int64(sec),
 			Nsec: int64(nsec),
 		}
 	}
 	var (
 		perfRevents int16
-		evfdRevents int16
 		pollErr     error
 	)
-	err := r.rawfd.Control(func(fd uintptr) {
+	ctlErr := r.rawfd.Control(func(fd uintptr) {
 		fds := []unix.PollFd{
 			{
 				Fd:     int32(fd),
@@ -147,25 +148,28 @@ func (r *ring) doPoll(req pollReq) pollResp {
 				Events: unix.POLLIN,
 			},
 		}
-		_, pollErr = unix.Ppoll(fds, timeout, nil)
+		_, pollErr = unix.Ppoll(fds, systimeout, nil)
 		perfRevents = fds[0].Revents
-		evfdRevents = fds[1].Revents
 	})
-	// If POLLIN was raised on r.evfd, consume the event.
-	if evfdRevents&unix.POLLIN != 0 {
-		var buf [8]byte
-		unix.Read(r.evfd, buf[:])
-		if !bytes.Equal(buf[:], nativeEndian1Bytes) {
-			panic("internal error: inconsistent eventfd state")
-		}
+	_ = perfRevents // TODO(acln): check these
+	sawEvent := false
+	evfdErr := r.drainEvent()
+	if evfdErr == nil {
+		sawEvent = true
 	}
-	if err != nil {
-		return pollResp{err: err}
+	if ctlErr != nil {
+		return pollResp{sawEvent: sawEvent, err: ctlErr}
 	}
-	return pollResp{
-		perfRevents: perfRevents,
-		err:         pollErr,
+	return pollResp{sawEvent: sawEvent, err: pollErr}
+}
+
+func (r *ring) drainEvent() error {
+	var buf [8]byte
+	_, err := unix.Read(r.evfd, buf[:])
+	if err == nil && !bytes.Equal(buf[:], nativeEndian1Bytes) {
+		panic("internal error: inconsistent eventfd state")
 	}
+	return err
 }
 
 func (r *ring) destroy() {
@@ -175,11 +179,7 @@ func (r *ring) destroy() {
 	unix.Close(r.evfd)
 }
 
-type pollReq struct {
-	timeout time.Duration
-}
-
 type pollResp struct {
-	perfRevents int16
-	err         error
+	sawEvent bool
+	err      error
 }
