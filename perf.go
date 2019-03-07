@@ -68,11 +68,11 @@ type Event struct {
 	// fd is the event file descriptor.
 	fd int
 
-	// group holds other events in the event group, if this event is an
+	// group contains other events in the event group, if this event is an
 	// event group leader.
 	group []*Event
 
-	// attr holds the attributes the Event was configured with.
+	// attr is the set of attributes the Event was configured with.
 	attr EventAttr
 
 	// ring is the (entire) memory mapped ring buffer.
@@ -494,7 +494,7 @@ type EventAttr struct {
 	// Type is the major type of the event.
 	Type EventType
 
-	// Config holds type-specific event configuration.
+	// Config is the type-specific event configuration.
 	Config uint64
 
 	// Sample configures the sample period or sample frequency for
@@ -513,7 +513,7 @@ type EventAttr struct {
 	// TODO(acln): do better than send people to a C header.
 	ReadFormat ReadFormat
 
-	// Options holds general event options.
+	// Options contains fine grained event configuration.
 	//
 	// TODO(acln): this is not a great description.
 	Options EventOptions
@@ -523,22 +523,22 @@ type EventAttr struct {
 	// Otherwise, it is interpreted as "wake up every n events".
 	Wakeup uint32
 
-	// BreakpointType holds the breakpoint type.
+	// BreakpointType is the breakpoint type, if Type == BreakpointEvent.
 	BreakpointType uint32
 
 	// Config1 is used for events that need an extra register or otherwise
 	// do not fit in the regular config field.
 	//
-	// For breakpoint events, Config1 holds the breakpoint address.
-	// For kprobes, Config1 holds the kprobe function. For uprobes,
-	// Config1 holds the uprobe path.
+	// For breakpoint events, Config1 is the breakpoint address.
+	// For kprobes, Config1 is the kprobe function. For uprobes, Config1
+	// is the uprobe path.
 	Config1 uint64
 
 	// Config2 is a further extension of the Config1 field.
 	//
-	// For breakpoint events, Config2 holds the length of the breakpoint.
-	// For kprobes, when the kprobe function is NULL, Config2 holds the
-	// address of the kprobe. For both kprobes and uprobes, Config2 holds
+	// For breakpoint events, Config2 is the length of the breakpoint.
+	// For kprobes, when the kprobe function is NULL, Config2 is the
+	// address of the kprobe. For both kprobes and uprobes, Config2 is
 	// the probe offset.
 	Config2 uint64
 
@@ -1132,7 +1132,7 @@ type Record interface {
 	DecodeFrom(rr *RawRecord) error
 }
 
-// RecordID holds identifiers when and where a record was collected.
+// RecordID contains identifiers for when and where a record was collected.
 //
 // See struct sample_id in the perf_event_open manual page.
 //
