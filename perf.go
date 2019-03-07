@@ -92,7 +92,7 @@ type Event struct {
 	meta *unix.PerfEventMmapPage
 
 	// evfd is an event file descriptor (see eventfd(2)): it is used to
-	// unblock calls to ppoll(2) on sysfd.
+	// unblock calls to ppoll(2) on the perf fd.
 	evfd int
 
 	// pollreq communicates requests from ReadRecord to the poll goroutine
@@ -132,7 +132,7 @@ const numRingPages = 128 // like the perf tool
 // associated with the specified group Event. If group is non-nil, and
 // FlagNoGroup | FlagFDOutput are not set, the attr.Options.Disabled setting
 // is ignored: the group leader controls when the entire group is enabled.
-func Open(attr EventAttr, pid int, cpu int, group *Event, flags OpenFlag) (*Event, error) {
+func Open(attr EventAttr, pid, cpu int, group *Event, flags OpenFlag) (*Event, error) {
 	groupfd := -1
 	if group != nil {
 		groupfd = group.fd
