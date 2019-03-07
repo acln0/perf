@@ -127,11 +127,6 @@ func TestTracepoint(t *testing.T) {
 	}
 	defer ev.Close()
 
-	r, err := newRing(ev.fd, 128)
-	if err != nil {
-		t.Fatalf("newRing: %v", err)
-	}
-
 	if err := ev.Enable(); err != nil {
 		t.Fatalf("Enable: %v", err)
 	}
@@ -151,7 +146,7 @@ func TestTracepoint(t *testing.T) {
 	errc := make(chan error)
 
 	go func() {
-		_, err := r.ReadRecord(ctx)
+		_, err := ev.ReadRecord(ctx)
 		errc <- err
 	}()
 

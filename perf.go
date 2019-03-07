@@ -6,14 +6,19 @@
 package perf
 
 import (
+	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 	"unsafe"
@@ -55,16 +60,55 @@ const (
 
 	// flagCloexec configures the event file descriptor to be opened in
 	// close-on-exec mode.
-	flagCloexec OpenFlag = 1 << 3 // TODO(acln): missing PERF_FLAG_FD_CLOEXEC from x/sys/unix
+	flagCloexec OpenFlag = 1 << 3 // TODO(acln): missing from x/sys/unix
 )
 
 type Event struct {
-	fd    *os.File        // event file descriptor
-	rawfd syscall.RawConn // derived from fd, same lifetime
+	// fd is the event file descriptor
+	fd *os.File
+
+	// sysfd is the raw event file descriptor: it is derived from
+	// fd at initialization time and shares fd's lifetime.
+	sysfd syscall.RawConn
+
+	// group holds other events in the event group, if this event is an
+	// event group leader.
 	group []*Event
 
-	attr EventAttr // attributes the Event was configured with
+	// attr holds the attributes the Event was configured with.
+	attr EventAttr
+
+	// ring is the (entire) memory mapped ring buffer.
+	ring []byte
+
+	// ringdata is the data region of the ring buffer.
+	ringdata []byte
+
+	// meta is the metadata page: &ring[0].
+	meta *unix.PerfEventMmapPage
+
+	// evfd is an event file descriptor (see eventfd(2)): it is used to
+	// unblock calls to ppoll(2) on sysfd.
+	evfd int
+
+	// initPollOnce protects the lazy initialization of the poll goroutine
+	// associated, with the ring, as well as the following fields.
+	initPollOnce sync.Once
+
+	// polling tells us if there is a poll goroutine active for the event.
+	polling bool
+
+	// pollreq communicates requests from ReadRecord to the poll goroutine
+	// associated with the ring. The values represent timeouts; zero
+	// means no timeout.
+	pollreq chan time.Duration
+
+	// pollresp receives responses from the poll goroutine associated
+	// with the ring, back to ReadRecord.
+	pollresp chan pollresp
 }
+
+const numRingPages = 128 // like the perf tool
 
 // Open opens the event configured by attr.
 //
@@ -91,13 +135,10 @@ type Event struct {
 // associated with the specified group Event. If group is non-nil, and
 // FlagNoGroup | FlagFDOutput are not set, the attr.Options.Disabled setting
 // is ignored: the group leader controls when the entire group is enabled.
-//
-//
 func Open(attr EventAttr, pid int, cpu int, group *Event, flags OpenFlag) (*Event, error) {
 	groupfd := -1
 	if group != nil {
-		// TODO(acln): do better than this
-		err := group.rawfd.Control(func(fd uintptr) {
+		err := group.sysfd.Control(func(fd uintptr) {
 			groupfd = int(fd)
 		})
 		if err != nil {
@@ -105,23 +146,47 @@ func Open(attr EventAttr, pid int, cpu int, group *Event, flags OpenFlag) (*Even
 		}
 	}
 	flags |= flagCloexec
-	fd, err := unix.PerfEventOpen(attr.sysAttr(), pid, cpu, groupfd, int(flags))
+	rawfd, err := unix.PerfEventOpen(attr.sysAttr(), pid, cpu, groupfd, int(flags))
 	if err != nil {
 		return nil, os.NewSyscallError("perf_event_open", err)
 	}
-	if err := unix.SetNonblock(fd, true); err != nil {
+	if err := unix.SetNonblock(rawfd, true); err != nil {
 		return nil, os.NewSyscallError("setnonblock", err)
 	}
-	ev := &Event{
-		fd:   os.NewFile(uintptr(fd), "perf"),
-		attr: attr,
-	}
-	rawfd, err := ev.fd.SyscallConn()
+	fd := os.NewFile(uintptr(rawfd), "perf")
+	sysfd, err := fd.SyscallConn()
 	if err != nil {
 		return nil, err
 	}
-	ev.rawfd = rawfd
-	ev.group = append(ev.group, ev)
+	size := (1 + numRingPages) * unix.Getpagesize()
+	var ring []byte
+	var mmaperr error
+	err = sysfd.Control(func(fd uintptr) {
+		const prot = unix.PROT_READ | unix.PROT_WRITE
+		const flags = unix.MAP_SHARED
+		ring, mmaperr = unix.Mmap(int(fd), 0, size, prot, flags)
+	})
+	if err != nil {
+		return nil, err
+	}
+	if mmaperr != nil {
+		return nil, err
+	}
+	meta := (*unix.PerfEventMmapPage)(unsafe.Pointer(&ring[0]))
+	ringdata := ring[meta.Data_offset:]
+	evfd, err := unix.Eventfd(0, unix.EFD_CLOEXEC|unix.EFD_NONBLOCK)
+	if err != nil {
+		return nil, err
+	}
+	ev := &Event{
+		fd:       fd,
+		sysfd:    sysfd,
+		attr:     attr,
+		ring:     ring,
+		ringdata: ringdata,
+		meta:     meta,
+		evfd:     evfd,
+	}
 	if group != nil {
 		group.group = append(group.group, ev)
 	}
@@ -131,7 +196,7 @@ func Open(attr EventAttr, pid int, cpu int, group *Event, flags OpenFlag) (*Even
 // Enable enables the event.
 func (ev *Event) Enable() error {
 	var ioctlErr error
-	err := ev.rawfd.Control(func(fd uintptr) {
+	err := ev.sysfd.Control(func(fd uintptr) {
 		ioctlErr = ioctlEnable(int(fd))
 	})
 	if err != nil {
@@ -143,7 +208,7 @@ func (ev *Event) Enable() error {
 // Disable disables the event.
 func (ev *Event) Disable() error {
 	var ioctlErr error
-	err := ev.rawfd.Control(func(fd uintptr) {
+	err := ev.sysfd.Control(func(fd uintptr) {
 		ioctlErr = ioctlDisable(int(fd))
 	})
 	if err != nil {
@@ -155,7 +220,7 @@ func (ev *Event) Disable() error {
 // Reset resets the counters associated with the event.
 func (ev *Event) Reset() error {
 	var ioctlErr error
-	err := ev.rawfd.Control(func(fd uintptr) {
+	err := ev.sysfd.Control(func(fd uintptr) {
 		ioctlErr = ioctlReset(int(fd))
 	})
 	if err != nil {
@@ -165,12 +230,6 @@ func (ev *Event) Reset() error {
 }
 
 // TODO(acln): add remaining ioctls as methods on *Event.
-
-// Close closes the ev and any other events in its group.
-func (ev *Event) Close() error {
-	// TODO(acln): close the other ones as well.
-	return ev.fd.Close()
-}
 
 var errGroupEvent = errors.New("calling ReadCount on group Event")
 
@@ -234,7 +293,7 @@ func (ev *Event) ReadGroupCount() (GroupCount, error) {
 		return gc, errSingleEvent
 	}
 	headerSize := ev.attr.ReadFormat.groupReadHeaderSize()
-	countsSize := len(ev.group) * ev.attr.ReadFormat.groupReadCountSize()
+	countsSize := (1 + len(ev.group)) * ev.attr.ReadFormat.groupReadCountSize()
 	buf := make([]byte, headerSize+countsSize)
 	_, err := ev.fd.Read(buf)
 	if err != nil {
@@ -267,14 +326,153 @@ func (ev *Event) ReadGroupCount() (GroupCount, error) {
 
 // ReadRecord reads and decodes a record from the memory mapped ring buffer
 // associated with ev.
-func (ev *Event) ReadRecord() (Record, error) {
-	panic("not implemented")
+func (ev *Event) ReadRecord(ctx context.Context) (Record, error) {
+	ev.initPollOnce.Do(ev.initpoll)
+
+	rec, ok := ev.readRecord()
+	if ok {
+		return rec, nil
+	}
+
+	var timeout time.Duration
+	deadline, ok := ctx.Deadline()
+	if ok {
+		timeout = deadline.Sub(time.Now())
+		if timeout <= 0 {
+			timeout = 1
+		}
+	}
+
+	ev.pollreq <- timeout
+
+	select {
+	case <-ctx.Done():
+		// TODO(acln): document the wroteEvent + sawEvent machinery
+		wroteEvent := false
+		err := ctx.Err()
+		if err == context.Canceled {
+			unix.Write(ev.evfd, nativeEndian1Bytes)
+			wroteEvent = true
+		}
+		resp := <-ev.pollresp
+		if wroteEvent && !resp.sawEvent {
+			ev.drainEvent()
+		}
+		return nil, err
+	case resp := <-ev.pollresp:
+		if resp.err != nil {
+			return nil, resp.err
+		}
+		rec, _ := ev.readRecord()
+		return rec, nil
+	}
+}
+
+func (ev *Event) readRecord() (Record, bool) {
+	base := ev.meta.Data_offset
+	head := atomic.LoadUint64(&ev.meta.Data_head)
+	tail := atomic.LoadUint64(&ev.meta.Data_tail)
+
+	// TODO(acln): implement
+
+	fmt.Printf("base: %d\nhead: %d\ntail: %d\n", base, head, tail)
+	return nil, false
 }
 
 // ReadRawRecord reads a raw record from the memory mapped ring buffer
 // associated with ev.
 func (ev *Event) ReadRawRecord(raw *RawRecord) error {
 	panic("not implemented")
+}
+
+func (ev *Event) initpoll() {
+	ev.polling = true
+	ev.pollreq = make(chan time.Duration)
+	ev.pollresp = make(chan pollresp)
+	go ev.poll()
+}
+
+func (ev *Event) poll() {
+	defer close(ev.pollresp)
+
+	for timeout := range ev.pollreq {
+		ev.pollresp <- ev.doPoll(timeout)
+	}
+}
+
+func (ev *Event) doPoll(timeout time.Duration) pollresp {
+	var systimeout *unix.Timespec
+	if timeout > 0 {
+		sec := timeout / time.Second
+		nsec := timeout - sec*time.Second
+		systimeout = &unix.Timespec{
+			Sec:  int64(sec),
+			Nsec: int64(nsec),
+		}
+	}
+	var (
+		perfRevents int16
+		pollErr     error
+	)
+	ctlErr := ev.sysfd.Control(func(fd uintptr) {
+		fds := []unix.PollFd{
+			{
+				Fd:     int32(fd),
+				Events: unix.POLLIN,
+			},
+			{
+				Fd:     int32(ev.evfd),
+				Events: unix.POLLIN,
+			},
+		}
+		_, pollErr = unix.Ppoll(fds, systimeout, nil)
+		perfRevents = fds[0].Revents
+	})
+	_ = perfRevents // TODO(acln): check these
+	sawEvent := false
+	evfdErr := ev.drainEvent()
+	if evfdErr == nil {
+		sawEvent = true
+	}
+	if ctlErr != nil {
+		return pollresp{sawEvent: sawEvent, err: ctlErr}
+	}
+	return pollresp{sawEvent: sawEvent, err: pollErr}
+}
+
+var (
+	evfd1              = uint64(1)
+	nativeEndian1Bytes = (*[8]byte)(unsafe.Pointer(&evfd1))[:]
+)
+
+func (ev *Event) drainEvent() error {
+	var buf [8]byte
+	_, err := unix.Read(ev.evfd, buf[:])
+	if err == nil && !bytes.Equal(buf[:], nativeEndian1Bytes) {
+		panic("internal error: inconsistent eventfd state")
+	}
+	return err
+}
+
+// Close closes the event. Close must not be called concurrently with any
+// other methods on the Event.
+func (ev *Event) Close() error {
+	// ev.polling is set from (*Event).initpoll, which is called
+	// from (*Event).ReadRecord. Since we forbid concurrent calls to
+	// ReadRecord and Close, reading it here without synchronization
+	// is fine.
+	if ev.polling {
+		close(ev.pollreq)
+		<-ev.pollresp
+	}
+	unix.Munmap(ev.ring)
+	unix.Close(ev.evfd)
+	return ev.fd.Close()
+}
+
+type pollresp struct {
+	sawEvent bool
+	err      error
 }
 
 // An EventGroup configures a group of related events.
