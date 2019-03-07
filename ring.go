@@ -27,15 +27,13 @@ type ring struct {
 	pollResp chan pollResp           // receives poll results from polling goroutine
 }
 
-const pageSize = 4096
-
 // newRing creates and maps a new ring buffer, of size 1+2^n pages.
 func newRing(fd *os.File, n uint) (*ring, error) {
 	rawfd, err := fd.SyscallConn()
 	if err != nil {
 		return nil, err
 	}
-	size := (1 + (1 << n)) * pageSize
+	size := (1 + (1 << n)) * unix.Getpagesize()
 	var mapping []byte
 	var mmaperr error
 	err = rawfd.Control(func(fd uintptr) {
