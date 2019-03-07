@@ -61,9 +61,16 @@ const (
 	flagCloexec OpenFlag = 1 << 3 // TODO(acln): missing from x/sys/unix
 )
 
+// Event states.
+const (
+	eventStateUninitialized = 0
+	eventStateOK            = 1
+	eventStateClosed        = 2
+)
+
 type Event struct {
-	// closed is set to 1 when the Event is closed.
-	closed int32
+	// state is the state of the event. See eventState* constants.
+	state int32
 
 	// fd is the event file descriptor.
 	fd int
@@ -165,6 +172,7 @@ func Open(attr EventAttr, pid int, cpu int, group *Event, flags OpenFlag) (*Even
 	if group != nil {
 		group.group = append(group.group, ev)
 	}
+	atomic.StoreInt32(&ev.state, eventStateOK)
 	go ev.poll() // TODO(acln): start this lazily somehow?
 	return ev, nil
 }
@@ -173,10 +181,15 @@ func (ev *Event) ok() error {
 	if ev == nil {
 		return os.ErrInvalid
 	}
-	if atomic.LoadInt32(&ev.closed) != 0 {
+	state := atomic.LoadInt32(&ev.state)
+	switch state {
+	case eventStateUninitialized:
+		return os.ErrInvalid
+	case eventStateOK:
+		return nil
+	default: // eventStateClosed
 		return os.ErrClosed
 	}
-	return nil
 }
 
 // Enable enables the event.
@@ -306,8 +319,11 @@ func (ev *Event) ReadGroupCount() (GroupCount, error) {
 	return gc, nil
 }
 
-// ReadRecord reads and decodes a record from the memory mapped ring buffer
+// ReadRecord reads and decodes a sampling event from the ring buffer
 // associated with ev.
+//
+// ReadRecord may be called concurrently with ReadCount or ReadGroupCount,
+// but not concurrently with Close or any other method.
 func (ev *Event) ReadRecord(ctx context.Context) (Record, error) {
 	if err := ev.ok(); err != nil {
 		return nil, err
@@ -421,7 +437,7 @@ func (ev *Event) drainEvent() error {
 // Close closes the event. Close must not be called concurrently with any
 // other methods on the Event.
 func (ev *Event) Close() error {
-	atomic.StoreInt32(&ev.closed, 1)
+	atomic.StoreInt32(&ev.state, eventStateClosed)
 	close(ev.pollreq)
 	<-ev.pollresp
 	unix.Munmap(ev.ring)
