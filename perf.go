@@ -293,9 +293,9 @@ func (ev *Event) ReadGroupCount() (GroupCount, error) {
 	if ev.attr.ReadFormat.TotalTimeRunning {
 		gc.TimeRunning = time.Duration(nextField())
 	}
-	counts := make([]Count, 0, nr)
+	counts := make([]struct{ Value, ID uint64 }, 0, nr)
 	for i := 0; i < nr; i++ {
-		var c Count
+		var c struct{ Value, ID uint64 }
 		c.Value = nextField()
 		if ev.attr.ReadFormat.ID {
 			c.ID = nextField()
@@ -481,12 +481,14 @@ type Count struct {
 
 // GroupCount is a group of measurements taken by an Event group.
 //
-// TODO(acln): document that TimeEnabled is set only at the top level
-// TODO(acln): anonymous struct for Counts?
+// Fields are populated as described in the Count documentation.
 type GroupCount struct {
 	TimeEnabled time.Duration
 	TimeRunning time.Duration
-	Counts      []Count
+	Counts      []struct {
+		Value uint64
+		ID    uint64
+	}
 }
 
 // EventAttr configures a perf event.
