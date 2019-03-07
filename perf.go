@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 	"unsafe"
 
@@ -58,14 +59,11 @@ const (
 )
 
 type Event struct {
-	intfd    int                     // integer file descriptor
-	fd       *os.File                // event file descriptor
-	ring     []byte                  // memory mapped ring buffer
-	ringSize int                     // size of the ring in bytes, excluding meta page
-	meta     *unix.PerfEventMmapPage // metadata page: &ring[0]
-	group    []*Event
+	fd    *os.File        // event file descriptor
+	rawfd syscall.RawConn // derived from fd, same lifetime
+	group []*Event
 
-	attr *EventAttr // attributes the Event was configured with
+	attr EventAttr // attributes the Event was configured with
 }
 
 // Open opens the event configured by attr.
@@ -95,11 +93,16 @@ type Event struct {
 // is ignored: the group leader controls when the entire group is enabled.
 //
 //
-func Open(attr *EventAttr, pid int, cpu int, group *Event, flags OpenFlag) (*Event, error) {
+func Open(attr EventAttr, pid int, cpu int, group *Event, flags OpenFlag) (*Event, error) {
 	groupfd := -1
 	if group != nil {
 		// TODO(acln): do better than this
-		groupfd = group.intfd
+		err := group.rawfd.Control(func(fd uintptr) {
+			groupfd = int(fd)
+		})
+		if err != nil {
+			return nil, err // TODO(acln): do better than this
+		}
 	}
 	flags |= flagCloexec
 	fd, err := unix.PerfEventOpen(attr.sysAttr(), pid, cpu, groupfd, int(flags))
@@ -110,10 +113,14 @@ func Open(attr *EventAttr, pid int, cpu int, group *Event, flags OpenFlag) (*Eve
 		return nil, os.NewSyscallError("setnonblock", err)
 	}
 	ev := &Event{
-		intfd: fd,
-		fd:    os.NewFile(uintptr(fd), "perf"),
-		attr:  attr, // TODO(acln): make a copy
+		fd:   os.NewFile(uintptr(fd), "perf"),
+		attr: attr,
 	}
+	rawfd, err := ev.fd.SyscallConn()
+	if err != nil {
+		return nil, err
+	}
+	ev.rawfd = rawfd
 	ev.group = append(ev.group, ev)
 	if group != nil {
 		group.group = append(group.group, ev)
@@ -123,17 +130,38 @@ func Open(attr *EventAttr, pid int, cpu int, group *Event, flags OpenFlag) (*Eve
 
 // Enable enables the event.
 func (ev *Event) Enable() error {
-	return ioctlEnable(int(ev.intfd))
+	var ioctlErr error
+	err := ev.rawfd.Control(func(fd uintptr) {
+		ioctlErr = ioctlEnable(int(fd))
+	})
+	if err != nil {
+		return err
+	}
+	return ioctlErr
 }
 
 // Disable disables the event.
 func (ev *Event) Disable() error {
-	return ioctlDisable(int(ev.intfd))
+	var ioctlErr error
+	err := ev.rawfd.Control(func(fd uintptr) {
+		ioctlErr = ioctlDisable(int(fd))
+	})
+	if err != nil {
+		return err
+	}
+	return ioctlErr
 }
 
 // Reset resets the counters associated with the event.
 func (ev *Event) Reset() error {
-	return ioctlReset(int(ev.intfd))
+	var ioctlErr error
+	err := ev.rawfd.Control(func(fd uintptr) {
+		ioctlErr = ioctlReset(int(fd))
+	})
+	if err != nil {
+		return err
+	}
+	return ioctlErr
 }
 
 // TODO(acln): add remaining ioctls as methods on *Event.
@@ -170,8 +198,7 @@ func (ev *Event) ReadCount() (Count, error) {
 	if ev.attr.ReadFormat.Group {
 		return c, errGroupEvent
 	}
-	// TODO(acln): since c is contiguous, pass it to read() directly?
-	// TODO(acln): use rdpmc on x86 instead of a system call?
+	// TODO(acln): use rdpmc on x86 instead of read(2)?
 	buf := make([]byte, ev.attr.ReadFormat.readSize())
 	_, err := ev.fd.Read(buf)
 	if err != nil {
@@ -273,13 +300,13 @@ func (g *EventGroup) AddCounter(counters ...Counter) {
 
 // AddEvent adds the specified event to the group. The label need not be unique
 // and may be empty.
-func (g *EventGroup) AddEvent(label string, attr *EventAttr) {
+func (g *EventGroup) AddEvent(label string, attr EventAttr) {
 	panic("not implemented")
 }
 
 type Counter interface {
 	Label() string
-	EventAttr() *EventAttr
+	EventAttr() EventAttr
 }
 
 // Count is a measurement taken by an Event.
@@ -325,9 +352,13 @@ type EventAttr struct {
 
 	// ReadFormat specifies the format of counts read from the event file
 	// descriptor. See struct read_format in perf_event.h for details.
+	//
+	// TODO(acln): do better than send people to a C header.
 	ReadFormat ReadFormat
 
 	// Options holds general event options.
+	//
+	// TODO(acln): this is not a great description.
 	Options EventOptions
 
 	// Wakeup configures event wakeup. If Options.Watermark is set,
@@ -382,7 +413,7 @@ type EventAttr struct {
 	SampleMaxStack uint16
 }
 
-func (attr *EventAttr) sysAttr() *unix.PerfEventAttr {
+func (attr EventAttr) sysAttr() *unix.PerfEventAttr {
 	return &unix.PerfEventAttr{
 		Type:               uint32(attr.Type),
 		Size:               uint32(unsafe.Sizeof(unix.PerfEventAttr{})),
@@ -462,8 +493,8 @@ func (hwc HardwareCounter) Label() string {
 	panic("not implemented")
 }
 
-func (hwc HardwareCounter) EventAttr() *EventAttr {
-	return &EventAttr{Type: HardwareEvent, Config: uint64(hwc)}
+func (hwc HardwareCounter) EventAttr() EventAttr {
+	return EventAttr{Type: HardwareEvent, Config: uint64(hwc)}
 }
 
 // AllHardwareCounters returns a slice of all known hardware counters.
@@ -504,8 +535,8 @@ func (swc SoftwareCounter) Label() string {
 	panic("not implemented")
 }
 
-func (swc SoftwareCounter) EventAttr() *EventAttr {
-	return &EventAttr{Type: SoftwareEvent, Config: uint64(swc)}
+func (swc SoftwareCounter) EventAttr() EventAttr {
+	return EventAttr{Type: SoftwareEvent, Config: uint64(swc)}
 }
 
 // AllSoftwareCounters returns a slice of all known software counters.
@@ -585,9 +616,9 @@ func (hwcc HardwareCacheCounter) Label() string {
 	panic("not implemented")
 }
 
-func (hwcc HardwareCacheCounter) EventAttr() *EventAttr {
+func (hwcc HardwareCacheCounter) EventAttr() EventAttr {
 	config := uint64(hwcc.Cache) | uint64(hwcc.Op<<8) | uint64(hwcc.Result<<16)
-	return &EventAttr{Type: HardwareCacheEvent, Config: config}
+	return EventAttr{Type: HardwareCacheEvent, Config: config}
 }
 
 // HardwareCacheCounters returns triples of cache counters, measuring the specified
@@ -613,18 +644,18 @@ func HardwareCacheCounters(caches []Cache, ops []CacheOp, results []CacheOpResul
 // for the value of the trace point associated with the specified category and
 // event, and returns an *EventAttr with the Type and Config fields set
 // to the appropriate values.
-func NewTracepoint(category string, event string) (*EventAttr, error) {
+func NewTracepoint(category string, event string) (EventAttr, error) {
 	f := filepath.Join("/sys/kernel/debug/tracing/events", category, event, "id")
 	content, err := ioutil.ReadFile(f)
 	if err != nil {
-		return nil, err
+		return EventAttr{}, err
 	}
 	nr := strings.TrimSpace(string(content)) // remove trailing newline
 	config, err := strconv.ParseUint(nr, 10, 64)
 	if err != nil {
-		return nil, err
+		return EventAttr{}, err
 	}
-	return &EventAttr{
+	return EventAttr{
 		Type:   TracepointEvent,
 		Config: config,
 	}, nil
@@ -642,8 +673,8 @@ func NewTracepoint(category string, event string) (*EventAttr, error) {
 //
 // Breakpoint sets the Type, BreakpointType, Config1 and Config2 fields on the
 // returned Event.
-func NewBreakpoint(typ BreakpointType, addr uint64, length BreakpointLength) *EventAttr {
-	return &EventAttr{
+func NewBreakpoint(typ BreakpointType, addr uint64, length BreakpointLength) EventAttr {
+	return EventAttr{
 		Type:           BreakpointEvent,
 		BreakpointType: uint32(typ),
 		Config1:        addr,
