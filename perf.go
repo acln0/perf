@@ -6,6 +6,7 @@
 package perf
 
 import (
+	"encoding/binary"
 	"errors"
 	"io"
 	"io/ioutil"
@@ -13,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
@@ -62,6 +64,8 @@ type Event struct {
 	ringSize int                     // size of the ring in bytes, excluding meta page
 	meta     *unix.PerfEventMmapPage // metadata page: &ring[0]
 	group    []*Event
+
+	attr *EventAttr // attributes the Event was configured with
 }
 
 // Open opens the event configured by attr.
@@ -108,6 +112,7 @@ func Open(attr *EventAttr, pid int, cpu int, group *Event, flags OpenFlag) (*Eve
 	ev := &Event{
 		intfd: fd,
 		fd:    os.NewFile(uintptr(fd), "perf"),
+		attr:  attr, // TODO(acln): make a copy
 	}
 	ev.group = append(ev.group, ev)
 	if group != nil {
@@ -141,43 +146,96 @@ func (ev *Event) Close() error {
 
 var errGroupEvent = errors.New("calling ReadCount on group Event")
 
-// ReadCount reads a single count. It returns an error if ev represents an
-// event group.
-func (ev *Event) ReadCount() (Count, error) {
-	// TODO(acln): check ev.isGroup
+var isLittleEndian bool
 
-	// TODO(acln): use rdpmc on x86 if available
-
-	// TODO(acln): check what flags we have
-	var val uint64
-	b := (*[8]byte)(unsafe.Pointer(&val))[:]
-	if _, err := ev.fd.Read(b); err != nil {
-		return Count{}, err
+func init() {
+	var x uint16 = 0x1234
+	b := (*[2]byte)(unsafe.Pointer(&x))
+	if b[0] == 0x34 {
+		isLittleEndian = true
 	}
-	return Count{Value: val}, nil
+}
+
+func nativeEndianUint64(b []byte) uint64 {
+	if isLittleEndian {
+		return binary.LittleEndian.Uint64(b)
+	}
+	return binary.BigEndian.Uint64(b)
+}
+
+// ReadCount reads a single count. If the Event was configured with
+// ReadFormat.Group, ReadCount returns an error.
+func (ev *Event) ReadCount() (Count, error) {
+	var c Count
+	if ev.attr.ReadFormat.Group {
+		return c, errGroupEvent
+	}
+	// TODO(acln): since c is contiguous, pass it to read() directly?
+	// TODO(acln): use rdpmc on x86 instead of a system call?
+	buf := make([]byte, ev.attr.ReadFormat.readSize())
+	_, err := ev.fd.Read(buf)
+	if err != nil {
+		return c, err
+	}
+	nextField := func() uint64 {
+		val := nativeEndianUint64(buf)
+		buf = buf[8:]
+		return val
+	}
+	c.Value = nextField()
+	if ev.attr.ReadFormat.TotalTimeEnabled {
+		c.TimeEnabled = time.Duration(nextField())
+	}
+	if ev.attr.ReadFormat.TotalTimeRunning {
+		c.TimeRunning = time.Duration(nextField())
+	}
+	if ev.attr.ReadFormat.ID {
+		c.ID = nextField()
+	}
+	return c, err
 }
 
 var errSingleEvent = errors.New("calling ReadGroupCount on non-group Event")
 
-// ReadGroupCount reads the counts associated with ev. It returns an error
-// if ev does not represent an event group.
+// ReadGroupCount reads the counts associated with ev.
+//
+// If the Event was not configued with ReadFormat.Group, ReadGroupCount
+// returns an error.
 func (ev *Event) ReadGroupCount() (GroupCount, error) {
-	if len(ev.group) == 0 {
-		return GroupCount{}, errSingleEvent
+	var gc GroupCount
+	if !ev.attr.ReadFormat.Group {
+		return gc, errSingleEvent
 	}
-	// TODO: check CountFormat, don't hard code this
-	values := make([]uint64, 1+len(ev.group))
-	base := unsafe.Pointer(&values[0])
-	nbytes := 8 * len(values)
-	b := (*[1 << 30]byte)(base)[:nbytes]
-	if _, err := ev.fd.Read(b); err != nil {
-		return GroupCount{}, err
+	headerSize := ev.attr.ReadFormat.groupReadHeaderSize()
+	countsSize := len(ev.group) * ev.attr.ReadFormat.groupReadCountSize()
+	buf := make([]byte, headerSize+countsSize)
+	_, err := ev.fd.Read(buf)
+	if err != nil {
+		return gc, err
 	}
-	var counts []Count
-	for _, val := range values[1:] {
-		counts = append(counts, Count{Value: val})
+	nextField := func() uint64 {
+		val := nativeEndianUint64(buf)
+		buf = buf[8:]
+		return val
 	}
-	return GroupCount{Counts: counts}, nil
+	nr := int(nextField())
+	if ev.attr.ReadFormat.TotalTimeEnabled {
+		gc.TimeEnabled = time.Duration(nextField())
+	}
+	if ev.attr.ReadFormat.TotalTimeRunning {
+		gc.TimeRunning = time.Duration(nextField())
+	}
+	counts := make([]Count, 0, nr)
+	for i := 0; i < nr; i++ {
+		var c Count
+		c.Value = nextField()
+		if ev.attr.ReadFormat.ID {
+			c.ID = nextField()
+		}
+		counts = append(counts, c)
+	}
+	gc.Counts = counts
+	return gc, nil
 }
 
 // ReadRecord reads and decodes a record from the memory mapped ring buffer
@@ -226,22 +284,24 @@ type Counter interface {
 
 // Count is a measurement taken by an Event.
 //
-// TODO(acln): document which fields are set based on CountFormat.
+// The Value field is always present and populated.
+//
+// The TimeEnabled field is populated if ReadFormat.TimeEnabled is set on
+// the Event the Count was read from. Ditto for TimeRunning and ID.
 type Count struct {
 	Value       uint64
-	TimeEnabled uint64
-	TimeRunning uint64
+	TimeEnabled time.Duration
+	TimeRunning time.Duration
 	ID          uint64
-
-	Label string
 }
 
 // GroupCount is a group of measurements taken by an Event group.
 //
-// TODO(acln): document which fields are set based on CountFormat.
+// TODO(acln): document that TimeEnabled is set only at the top level
+// TODO(acln): anonymous struct for Counts?
 type GroupCount struct {
-	TimeEnabled uint64
-	TimeRunning uint64
+	TimeEnabled time.Duration
+	TimeRunning time.Duration
 	Counts      []Count
 }
 
@@ -259,13 +319,13 @@ type EventAttr struct {
 	// interpreted as "sample period".
 	Sample uint64
 
-	// RecordFormat configures the format for overflow packets read from
+	// SampleFormat configures the format for overflow packets read from
 	// the ring buffer associated with the event.
-	RecordFormat RecordFormat
+	SampleFormat SampleFormat
 
-	// CountFormat specifies the format of counts read from the event file
+	// ReadFormat specifies the format of counts read from the event file
 	// descriptor. See struct read_format in perf_event.h for details.
-	CountFormat CountFormat
+	ReadFormat ReadFormat
 
 	// Options holds general event options.
 	Options EventOptions
@@ -294,9 +354,9 @@ type EventAttr struct {
 	// the probe offset.
 	Config2 uint64
 
-	// BranchSampleType specifies what branches to include in the
+	// BranchSampleFormat specifies what branches to include in the
 	// branch record, if SampleFormat.BranchStack is set.
-	BranchSampleType BranchSampleType
+	BranchSampleFormat BranchSampleFormat
 
 	// SampleRegsUser is the set of user registers to dump on samples.
 	SampleRegsUser uint64
@@ -328,20 +388,36 @@ func (attr *EventAttr) sysAttr() *unix.PerfEventAttr {
 		Size:               uint32(unsafe.Sizeof(unix.PerfEventAttr{})),
 		Config:             attr.Config,
 		Sample:             attr.Sample,
-		Sample_type:        attr.RecordFormat.Marshal(),
-		Read_format:        attr.CountFormat.Marshal(),
+		Sample_type:        attr.SampleFormat.Marshal(),
+		Read_format:        attr.ReadFormat.Marshal(),
 		Bits:               attr.Options.Marshal(),
 		Wakeup:             attr.Wakeup,
 		Bp_type:            attr.BreakpointType,
 		Ext1:               attr.Config1,
 		Ext2:               attr.Config2,
-		Branch_sample_type: uint64(attr.BranchSampleType),
+		Branch_sample_type: uint64(attr.BranchSampleFormat),
 		Sample_regs_user:   attr.SampleRegsUser,
 		Sample_stack_user:  attr.SampleStackUser,
 		Clockid:            attr.ClockID,
 		Sample_regs_intr:   attr.SampleRegsInt,
 		Aux_watermark:      attr.AuxWatermark,
 	}
+}
+
+// SetSamplePeriod configures the sampling period for the event.
+//
+// It sets attr.Sample to p and attr.Options.Freq to false.
+func (attr *EventAttr) SetSamplePeriod(p uint64) {
+	attr.Sample = p
+	attr.Options.Freq = false
+}
+
+// SetSampleFreq configures the sampling frequency for the event.
+//
+// It sets attr.Sample to f and enables attr.Options.Freq.
+func (attr *EventAttr) SetSampleFreq(f uint64) {
+	attr.Sample = f
+	attr.Options.Freq = true
 }
 
 // EventType is the overall type of a performance event.
@@ -587,8 +663,8 @@ func NewExecutionBreakpoint(addr uint64) *EventAttr {
 	panic("not implemented")
 }
 
-// RecordFormat configures information requested in overflow packets.
-type RecordFormat struct {
+// SampleFormat configures information requested in overflow packets.
+type SampleFormat struct {
 	IP          bool
 	Tid         bool
 	Time        bool
@@ -611,44 +687,77 @@ type RecordFormat struct {
 	PhysAddr    bool
 }
 
-// Marshal packs the RecordFormat into a uint64.
-func (f RecordFormat) Marshal() uint64 {
+// Marshal packs the SampleFormat into a uint64.
+func (st SampleFormat) Marshal() uint64 {
 	// Always keep this in sync with the type definition above.
 	fields := []bool{
-		f.IP,
-		f.Tid,
-		f.Time,
-		f.Addr,
-		f.Read,
-		f.Callchain,
-		f.ID,
-		f.CPU,
-		f.Period,
-		f.StreamID,
-		f.Raw,
-		f.BranchStack,
-		f.RegsUser,
-		f.StackUser,
-		f.Weight,
-		f.DataSource,
-		f.Identifier,
-		f.Transaction,
-		f.RegsIntr,
-		f.PhysAddr,
+		st.IP,
+		st.Tid,
+		st.Time,
+		st.Addr,
+		st.Read,
+		st.Callchain,
+		st.ID,
+		st.CPU,
+		st.Period,
+		st.StreamID,
+		st.Raw,
+		st.BranchStack,
+		st.RegsUser,
+		st.StackUser,
+		st.Weight,
+		st.DataSource,
+		st.Identifier,
+		st.Transaction,
+		st.RegsIntr,
+		st.PhysAddr,
 	}
 	return marshalBitwiseUint64(fields)
 }
 
-// CountFormat configures the format of Count or GroupCount measurements.
-type CountFormat struct {
+// ReadFormat configures the format of Count or GroupCount measurements.
+type ReadFormat struct {
 	TotalTimeEnabled bool
 	TotalTimeRunning bool
 	ID               bool
 	Group            bool
 }
 
-// Marshal marshals the CountFormat into a uint64.
-func (f CountFormat) Marshal() uint64 {
+func (f ReadFormat) readSize() int {
+	size := 8 // value is always set
+	if f.TotalTimeEnabled {
+		size += 8
+	}
+	if f.TotalTimeRunning {
+		size += 8
+	}
+	if f.ID {
+		size += 8
+	}
+	return size
+}
+
+func (f ReadFormat) groupReadHeaderSize() int {
+	size := 8 // number of events is always set
+	if f.TotalTimeEnabled {
+		size += 8
+	}
+	if f.TotalTimeRunning {
+		size += 8
+	}
+	return size
+}
+
+func (f ReadFormat) groupReadCountSize() int {
+	size := 8 // value is always set
+	if f.ID {
+		size += 8
+	}
+	return size
+}
+
+// Marshal marshals the ReadFormat into a uint64.
+func (f ReadFormat) Marshal() uint64 {
 	// Always keep this in sync with the type definition above.
 	fields := []bool{
 		f.TotalTimeEnabled,
@@ -736,20 +845,20 @@ const (
 	MustHaveZeroSkid     SkidConstraint = 3
 )
 
-// BranchSampleType ...
-type BranchSampleType uint32
+// BranchSampleFormat ...
+type BranchSampleFormat uint32
 
 // Branch sample types.
 const (
-	BranchSampleUser         BranchSampleType = unix.PERF_SAMPLE_BRANCH_USER
-	BranchSampleKernel       BranchSampleType = unix.PERF_SAMPLE_BRANCH_KERNEL
-	BranchSampleHypervisor   BranchSampleType = unix.PERF_SAMPLE_BRANCH_HV
-	BranchSampleAny          BranchSampleType = unix.PERF_SAMPLE_BRANCH_ANY
-	BranchSampleAnyCall      BranchSampleType = unix.PERF_SAMPLE_BRANCH_ANY_CALL
-	BranchSampleAnyReturn    BranchSampleType = unix.PERF_SAMPLE_BRANCH_ANY_RETURN
-	BranchSampleIndirectCall BranchSampleType = unix.PERF_SAMPLE_BRANCH_IND_CALL
+	BranchSampleUser         BranchSampleFormat = unix.PERF_SAMPLE_BRANCH_USER
+	BranchSampleKernel       BranchSampleFormat = unix.PERF_SAMPLE_BRANCH_KERNEL
+	BranchSampleHypervisor   BranchSampleFormat = unix.PERF_SAMPLE_BRANCH_HV
+	BranchSampleAny          BranchSampleFormat = unix.PERF_SAMPLE_BRANCH_ANY
+	BranchSampleAnyCall      BranchSampleFormat = unix.PERF_SAMPLE_BRANCH_ANY_CALL
+	BranchSampleAnyReturn    BranchSampleFormat = unix.PERF_SAMPLE_BRANCH_ANY_RETURN
+	BranchSampleIndirectCall BranchSampleFormat = unix.PERF_SAMPLE_BRANCH_IND_CALL
 
-	BranchSampleAbortTransaction BranchSampleType = 1 << (7 + iota) // TODO(acln): missing from x/sys/unix
+	BranchSampleAbortTransaction BranchSampleFormat = 1 << (7 + iota) // TODO(acln): missing from x/sys/unix
 	BranchSampleInTransaction
 	BranchSampleNoTransaction
 	BranchSampleCond
@@ -839,7 +948,7 @@ type Record interface {
 //
 // See struct sample_id in the perf_event_open manual page.
 //
-// TODO(acln): document the relationship between this and RecordFormat
+// TODO(acln): document the relationship between this and SampleFormat
 type RecordID struct {
 	Pid, Tid uint32
 	Time     uint64

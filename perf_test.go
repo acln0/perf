@@ -17,6 +17,11 @@ import (
 
 func TestInstructionCount(t *testing.T) {
 	attr := Instructions.EventAttr()
+	attr.ReadFormat = ReadFormat{
+		TotalTimeEnabled: true,
+		TotalTimeRunning: true,
+		ID:               true,
+	}
 	attr.Options.Disabled = true
 	attr.Options.ExcludeKernel = true
 	attr.Options.ExcludeHypervisor = true
@@ -37,7 +42,7 @@ func TestInstructionCount(t *testing.T) {
 		t.Fatalf("Enable: %v", err)
 	}
 
-	res := testasm.SumN(50000)
+	testasm.SumN(50000)
 
 	if err := ev.Disable(); err != nil {
 		t.Fatalf("Disable: %v", err)
@@ -48,7 +53,7 @@ func TestInstructionCount(t *testing.T) {
 		t.Fatalf("ReadCount: %v", err)
 	}
 
-	t.Logf("used %d instructions, got result %d", count.Value, res)
+	t.Logf("got %+v\n", count)
 }
 
 func TestGroup(t *testing.T) {
@@ -56,7 +61,12 @@ func TestGroup(t *testing.T) {
 	defer runtime.UnlockOSThread()
 
 	insns := Instructions.EventAttr()
-	insns.CountFormat.Group = true
+	insns.ReadFormat = ReadFormat{
+		TotalTimeEnabled: true,
+		TotalTimeRunning: true,
+		Group:            true,
+		ID:               true,
+	}
 	insns.Options.Disabled = true
 	insns.Options.ExcludeKernel = true
 	insns.Options.ExcludeHypervisor = true
@@ -89,13 +99,12 @@ func TestGroup(t *testing.T) {
 	if err := iev.Disable(); err != nil {
 		t.Fatalf("Disable: %v", err)
 	}
-
 	counts, err := iev.ReadGroupCount()
 	if err != nil {
 		t.Fatalf("ReadGroupCount: %v", err)
 	}
 
-	t.Logf("%d instructions, %d CPU cycles", counts.Counts[0].Value, counts.Counts[1].Value)
+	t.Logf("%+v instructions, %+v CPU cycles in %v %v", counts.Counts[0], counts.Counts[1], counts.TimeEnabled, counts.TimeRunning)
 }
 
 func TestTracepoint(t *testing.T) {
@@ -107,7 +116,7 @@ func TestTracepoint(t *testing.T) {
 		t.Fatalf("NewTracepoint: %v", err)
 	}
 
-	attr.RecordFormat.Identifier = true
+	attr.SampleFormat.Identifier = true
 	attr.Options.Disabled = true
 	attr.Options.ExcludeGuest = true
 	attr.Options.EnableOnExec = true
