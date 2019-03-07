@@ -16,8 +16,6 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/unix"
-
-	"acln.ro/ioctl"
 )
 
 const (
@@ -118,86 +116,19 @@ func Open(attr *EventAttr, pid int, cpu int, group *Event, flags OpenFlag) (*Eve
 	return ev, nil
 }
 
-// PERF_EVENT_IOC_* ioctls.
-var (
-	ioctlEnable = ioctl.N{
-		Name: "PERF_EVENT_IOC_ENABLE",
-		Type: '$',
-		Nr:   0,
-	}
-	ioctlDisable = ioctl.N{
-		Name: "PERF_EVENT_IOC_DISABLE",
-		Type: '$',
-		Nr:   1,
-	}
-	ioctlRefresh = ioctl.N{
-		Name: "PERF_EVENT_IOC_REFRESH",
-		Type: '$',
-		Nr:   2,
-	}
-	ioctlReset = ioctl.N{
-		Name: "PERF_EVENT_IOC_RESET",
-		Type: '$',
-		Nr:   3,
-	}
-	ioctlPeriod = ioctl.W{
-		Name: "PERF_EVENT_IOC_PERIOD",
-		Type: '$',
-		Nr:   4,
-	}
-	ioctlSetOutput = ioctl.N{
-		Name: "PERF_EVENT_IOC_SET_OUTPUT",
-		Type: '$',
-		Nr:   5,
-	}
-	ioctlSetFilter = ioctl.W{
-		Name: "PERF_EVENT_IOC_SET_FILTER",
-		Type: '$',
-		Nr:   6,
-	}
-	ioctlID = ioctl.R{
-		Name: "PERF_EVENT_IOC_ID",
-		Type: '$',
-		Nr:   7,
-	}
-	ioctlSetBPF = ioctl.W{
-		Name: "PERF_EVENT_IOC_SET_BPF",
-		Type: '$',
-		Nr:   8,
-	}
-	ioctlPauseOutput = ioctl.W{
-		Name: "PERF_EVENT_IOC_PAUSE_OUTPUT",
-		Type: '$',
-		Nr:   9,
-	}
-	ioctlQueryBPF = ioctl.WR{
-		Name: "PERF_EVENT_IOC_QUERY_BPF",
-		Type: '$',
-		Nr:   10,
-	}
-	ioctlModifyAttributes = ioctl.W{
-		Name: "PERF_EVENT_IOC_MODIFY_ATTRIBUTES",
-		Type: '$',
-		Nr:   11,
-	}
-)
-
 // Enable enables the event.
 func (ev *Event) Enable() error {
-	_, err := ioctlEnable.Exec(int(ev.intfd))
-	return err
+	return ioctlEnable(int(ev.intfd))
 }
 
 // Disable disables the event.
 func (ev *Event) Disable() error {
-	_, err := ioctlDisable.Exec(int(ev.intfd))
-	return err
+	return ioctlDisable(int(ev.intfd))
 }
 
 // Reset resets the counters associated with the event.
 func (ev *Event) Reset() error {
-	_, err := ioctlReset.Exec(int(ev.intfd))
-	return err
+	return ioctlReset(int(ev.intfd))
 }
 
 // TODO(acln): add remaining ioctls as methods on *Event.
@@ -214,6 +145,8 @@ var errGroupEvent = errors.New("calling ReadCount on group Event")
 // event group.
 func (ev *Event) ReadCount() (Count, error) {
 	// TODO(acln): check ev.isGroup
+
+	// TODO(acln): use rdpmc on x86 if available
 
 	// TODO(acln): check what flags we have
 	var val uint64

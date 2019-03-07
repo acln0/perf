@@ -111,6 +111,8 @@ func (r *ring) readRecord() (Record, bool) {
 	head := atomic.LoadUint64(&r.meta.Data_head)
 	tail := atomic.LoadUint64(&r.meta.Data_tail)
 
+	// TODO(acln): implement
+
 	fmt.Printf("base: %d\nhead: %d\ntail: %d\n", base, head, tail)
 	return nil, false
 }

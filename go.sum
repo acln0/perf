@@ -1,5 +1,2 @@
-acln.ro/ioctl v0.9.0 h1:buyh63/OfnzJ497K73jGg2PuyQfsgIToBQNt3UpoYRo=
-acln.ro/ioctl v0.9.0/go.mod h1:tpaHJ/mjAMo698c3Sxn3spBRGOrLhhkIjd/HFFdgkA8=
-golang.org/x/sys v0.0.0-20181031143558-9b800f95dbbc/go.mod h1:STP8DvDyc/dI5b8T5hshtkjS+E42TnysNCUPdjciGhY=
 golang.org/x/sys v0.0.0-20190303192550-c2f5717e611c h1:AXm9RSDBofvoECjrx/I1fceu1mdoJP5zCjxjsOmyGgI=
 golang.org/x/sys v0.0.0-20190303192550-c2f5717e611c/go.mod h1:STP8DvDyc/dI5b8T5hshtkjS+E42TnysNCUPdjciGhY=
