@@ -1136,6 +1136,9 @@ const (
 // TODO(acln): add these constants
 type RecordType uint32
 
+// Known record types.
+const ()
+
 // RecordHeader is the header present in every overflow record.
 type RecordHeader struct {
 	Type RecordType
@@ -1147,8 +1150,19 @@ type RecordHeader struct {
 // automatically implement the Record interface.
 func (rh RecordHeader) Header() RecordHeader { return rh }
 
-// MmapRecord records PROT_EXEC mappings, so user-space instruction pointers
-// can be correlated to code.
+// RecordID contains identifiers for when and where a record was collected.
+//
+// See struct sample_id in the perf_event_open manual page.
+//
+// TODO(acln): document the relationship between this and SampleFormat.
+type RecordID struct {
+	Pid, Tid uint32
+	Time     uint64
+	ID       uint64
+	StreamID uint64
+	CPU, Res uint32
+}
+
 type MmapRecord struct {
 	RecordHeader
 	Pid, Tid uint32
@@ -1156,55 +1170,160 @@ type MmapRecord struct {
 	Len      uint64
 	Pgoff    uint64
 	Filename string
+	RecordID
 }
 
-func (mr *MmapRecord) DecodeFrom(rr *RawRecord) error {
-	panic("not implemented")
-}
-
-// LostRecord indicates when events are lost.
 type LostRecord struct {
 	RecordHeader
-	ID uint64
+	ID   uint64
+	Lost uint64
 	RecordID
 }
 
-func (lr *LostRecord) DecodeFrom(rr *RawRecord) error {
-	panic("not implemented")
+type CommRecord struct {
+	RecordHeader
+	Pid  uint32
+	Tid  uint32
+	Comm string
+	RecordID
 }
 
-// ExitRecord indicates a process exit event.
 type ExitRecord struct {
 	RecordHeader
-	Pid, Ppid uint32
-	Tid, Ptid uint32
-	Time      uint64
+	Pid  uint32
+	Ppid uint32
+	Tid  uint32
+	Ptid uint32
+	Time uint64
 	RecordID
 }
 
-func (er *ExitRecord) DecodeFrom(rr *RawRecord) error {
-	panic("not implemented")
-}
-
-// Record is the interface implemented by all record types.
-//
-// TODO(acln): not all record types are implemented
-type Record interface {
-	Header() RecordHeader
-	DecodeFrom(rr *RawRecord) error
-}
-
-// RecordID contains identifiers for when and where a record was collected.
-//
-// See struct sample_id in the perf_event_open manual page.
-//
-// TODO(acln): document the relationship between this and SampleFormat
-type RecordID struct {
-	Pid, Tid uint32
+type ThrottleRecord struct {
+	RecordHeader
 	Time     uint64
 	ID       uint64
 	StreamID uint64
-	CPU, Res uint32
+	RecordID
+}
+
+type UnthrottleRecord struct {
+	RecordHeader
+	Time     uint64
+	ID       uint64
+	StreamID uint64
+	RecordID
+}
+
+type ForkRecord struct {
+	RecordHeader
+	Pid  uint32
+	Ppid uint32
+	Tid  uint32
+	Ptid uint32
+	Time uint64
+	RecordID
+}
+
+type ReadRecord struct {
+	RecordHeader
+	Pid    uint32
+	Tid    uint32
+	Values ReadFormat
+	RecordID
+}
+
+type SampleRecord struct {
+	// ABI fields:
+
+	RecordHeader
+	Identifier uint64
+	IP         uint64
+	Pid        uint32
+	Tid        uint32
+	Time       uint64
+	Addr       uint64
+	ID         uint64
+	StreamID   uint64
+	CPU        uint32
+	Res        uint32
+	Period     uint64
+	Values     ReadFormat
+	Callchain  []uint64
+
+	// Non-ABI fields:
+
+	Data        []byte
+	BranchStack []struct {
+		From  uint64
+		To    uint64
+		Flags uint64
+	}
+	UserRegsABI      uint64
+	UserRegs         []uint64
+	UserStackSize    uint64
+	UserStackData    []uint64
+	UserStackDynSize uint64
+	Weight           uint64
+	DataSrc          uint64
+	Transaction      uint64
+	IntrRegsABI      uint64
+	IntrRegs         []uint64
+	PhysAddr         uint64
+}
+
+type Mmap2Record struct {
+	RecordHeader
+	Pid           uint32
+	Tid           uint32
+	Addr          uint64
+	Len           uint64
+	Pgoff         uint64
+	Maj           uint32
+	Min           uint32
+	Ino           uint64
+	InoGeneration uint64
+	Prot          uint32
+	Flags         uint32
+	Filename      string
+	RecordID
+}
+
+type AuxRecord struct {
+	RecordHeader
+	AuxOffset uint64
+	AuxSize   uint64
+	Flags     uint64
+	RecordID
+}
+
+type ItraceStartRecord struct {
+	RecordHeader
+	Pid uint32
+	Tid uint32
+	RecordID
+}
+
+type SwitchRecord struct {
+	RecordHeader
+	RecordID
+}
+
+type CPUWideSwitchRecord struct {
+	RecordHeader
+	Pid uint32
+	Tid uint32
+	RecordID
+}
+
+type NamespacesRecord struct {
+	RecordHeader
+	Pid        uint32
+	Tid        uint32
+	Namespaces []struct {
+		Dev   uint64
+		Inode uint64
+	}
+	RecordID
 }
 
 // A File wraps a perf.data file and decodes the records therein.
@@ -1222,9 +1341,6 @@ func (f *File) ReadRawRecord(rr *RawRecord) error {
 }
 
 // TODO(acln): github.com/aclements/go-perf/perffile has perhaps a nicer API than this: investigate
-func (f *File) ReadRecord() (Record, error) {
-	panic("not implemented")
-}
 
 func marshalBitwiseUint64(fields []bool) uint64 {
 	var res uint64

@@ -161,6 +161,8 @@ func TestTracepoint(t *testing.T) {
 	errc := make(chan error)
 
 	go func() {
+		defer close(errc)
+
 		for i := 0; i < 100; i++ {
 			var raw RawRecord
 			err := ev.ReadRawRecord(ctx, &raw)
@@ -170,7 +172,6 @@ func TestTracepoint(t *testing.T) {
 			}
 			t.Logf("got raw record: %+v", raw)
 		}
-		close(errc)
 	}()
 
 	time.Sleep(100 * time.Millisecond)
