@@ -1014,34 +1014,34 @@ func (f ReadFormat) marshal() uint64 {
 
 // EventOptions contains low level event options.
 type EventOptions struct {
-	Disabled               bool           // off by default
-	Inherit                bool           // children inherit it
-	Pinned                 bool           // must always be on PMU
-	Exclusive              bool           // only group on PMU
-	ExcludeUser            bool           // don't count user
-	ExcludeKernel          bool           // ditto kernel
-	ExcludeHypervisor      bool           // ditto hypervisor
-	ExcludeIdle            bool           // don't count when idle
-	Mmap                   bool           // include mmap data
-	Comm                   bool           // include comm data
-	Freq                   bool           // use frequency, not period
-	InheritStat            bool           // per task counts
-	EnableOnExec           bool           // next exec enables
-	Task                   bool           // trace fork/exit
-	Watermark              bool           // wake up at watermark
-	PreciseIP              SkidConstraint // skid constraint
-	MmapData               bool           // non-exec mmap data
-	SampleIDAll            bool           // include all events in SampleFormat
-	ExcludeHost            bool           // don't count in host
-	ExcludeGuest           bool           // don't count in guest
-	ExcludeCallchainKernel bool           // exclude kernel callchains
-	ExcludeCallchainUser   bool           // exclude user callchains
-	Mmap2                  bool           // include mmap with inode data
-	CommExec               bool           // flag comm events that are due to an exec
-	UseClockID             bool           // use ClockID for time fields
-	ContextSwitch          bool           // context switch data
-	WriteBackward          bool           // TODO(acln): support this at all?
-	Namespaces             bool           // include namespaces data
+	Disabled               bool // off by default
+	Inherit                bool // children inherit it
+	Pinned                 bool // must always be on PMU
+	Exclusive              bool // only group on PMU
+	ExcludeUser            bool // don't count user
+	ExcludeKernel          bool // ditto kernel
+	ExcludeHypervisor      bool // ditto hypervisor
+	ExcludeIdle            bool // don't count when idle
+	Mmap                   bool // include mmap data
+	Comm                   bool // include comm data
+	Freq                   bool // use frequency, not period
+	InheritStat            bool // per task counts
+	EnableOnExec           bool // next exec enables
+	Task                   bool // trace fork/exit
+	Watermark              bool // wake up at watermark
+	PreciseIP              Skid // skid constraint
+	MmapData               bool // non-exec mmap data
+	SampleIDAll            bool // include all events in SampleFormat
+	ExcludeHost            bool // don't count in host
+	ExcludeGuest           bool // don't count in guest
+	ExcludeCallchainKernel bool // exclude kernel callchains
+	ExcludeCallchainUser   bool // exclude user callchains
+	Mmap2                  bool // include mmap with inode data
+	CommExec               bool // flag comm events that are due to an exec
+	UseClockID             bool // use ClockID for time fields
+	ContextSwitch          bool // context switch data
+	WriteBackward          bool // TODO(acln): support this at all?
+	Namespaces             bool // include namespaces data
 }
 
 func (opt EventOptions) marshal() uint64 {
@@ -1078,15 +1078,15 @@ func (opt EventOptions) marshal() uint64 {
 	return marshalBitwiseUint64(fields)
 }
 
-// SkidConstraint is an instruction pointer skid constraint.
-type SkidConstraint int
+// Skid is an instruction pointer skid constraint.
+type Skid int
 
 // Supported Skid settings.
 const (
-	CanHaveArbitrarySkid SkidConstraint = 0
-	MustHaveConstantSkid SkidConstraint = 1
-	RequestedZeroSkid    SkidConstraint = 2
-	MustHaveZeroSkid     SkidConstraint = 3
+	CanHaveArbitrarySkid Skid = 0
+	MustHaveConstantSkid Skid = 1
+	RequestedZeroSkid    Skid = 2
+	MustHaveZeroSkid     Skid = 3
 )
 
 // BranchSampleFormat ...
