@@ -35,33 +35,32 @@ const (
 // AnyCPU configures the specified process/thread to be measured on any CPU.
 const AnyCPU = -1
 
-// OpenFlag is a set of flags for Open. Values are |-ed together.
-type OpenFlag int
+// Flag is a set of flags for Open. Values are |-ed together.
+type Flag int
 
 // Flags for calls to Open.
 const (
-	// FlagNoGroup configures the event to ignore the group parameter
+	// NoGroup configures the event to ignore the group parameter
 	// except for the purpose of setting up output redirection using
-	// the FlagFDOutput flag.
-	FlagNoGroup OpenFlag = unix.PERF_FLAG_FD_NO_GROUP
+	// the FDOutput flag.
+	NoGroup Flag = unix.PERF_FLAG_FD_NO_GROUP
 
-	// FlagFDOutput re-routes the event's sampled output to be included
-	// in the memory mapped buffer of the event specified by the group
-	// parameter.
-	FlagFDOutput OpenFlag = unix.PERF_FLAG_FD_OUTPUT
+	// FDOutput re-routes the event's sampled output to be included in the
+	// memory mapped buffer of the event specified by the group parameter.
+	FDOutput Flag = unix.PERF_FLAG_FD_OUTPUT
 
-	// FlagPidCGroup activates per-container system-wide monitoring. In
-	// this case, a file descriptor opened on /dev/group/<x> must be
-	// passed as the pid parameter. Consult the perf_event_open man page
-	// for more details.
-	FlagPidCGroup OpenFlag = unix.PERF_FLAG_PID_CGROUP
+	// PidCGroup activates per-container system-wide monitoring. In this
+	// case, a file descriptor opened on /dev/group/<x> must be passed
+	// as the pid parameter. Consult the perf_event_open man page for
+	// more details.
+	PidCGroup Flag = unix.PERF_FLAG_PID_CGROUP
 
-	// flagCloexec configures the event file descriptor to be opened
-	// in close-on-exec mode. Package perf sets this flag by default on
+	// cloexec configures the event file descriptor to be opened in
+	// close-on-exec mode. Package perf sets this flag by default on
 	// all file descriptors.
 	//
 	// TODO(acln): PERF_FLAG_FD_CLOEXEC is missing from x/sys/unix
-	flagCloexec OpenFlag = 1 << 3
+	cloexec Flag = 1 << 3
 )
 
 type Event struct {
@@ -137,7 +136,7 @@ const numRingPages = 128
 // associated with the specified group Event. If group is non-nil, and
 // FlagNoGroup | FlagFDOutput are not set, the attr.Options.Disabled setting
 // is ignored: the group leader controls when the entire group is enabled.
-func Open(attr EventAttr, pid, cpu int, group *Event, flags OpenFlag) (*Event, error) {
+func Open(attr EventAttr, pid, cpu int, group *Event, flags Flag) (*Event, error) {
 	groupfd := -1
 	if group != nil {
 		if err := group.ok(); err != nil {
@@ -146,7 +145,7 @@ func Open(attr EventAttr, pid, cpu int, group *Event, flags OpenFlag) (*Event, e
 		// TODO(acln): this is not quite right: fix the race somehow.
 		groupfd = group.fd
 	}
-	flags |= flagCloexec
+	flags |= cloexec
 	fd, err := unix.PerfEventOpen(attr.sysAttr(), pid, cpu, groupfd, int(flags))
 	if err != nil {
 		return nil, os.NewSyscallError("perf_event_open", err)
@@ -497,7 +496,7 @@ type EventGroup struct {
 	// etc.
 }
 
-func (g *EventGroup) Open(pid int, cpu int, flags OpenFlag) (*Event, error) {
+func (g *EventGroup) Open(pid int, cpu int, flags Flag) (*Event, error) {
 	panic("not implemented")
 }
 
