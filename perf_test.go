@@ -146,8 +146,8 @@ func TestTracepoint(t *testing.T) {
 	errc := make(chan error)
 
 	go func() {
-		_, err := ev.ReadRecord(ctx)
-		errc <- err
+		var raw RawRecord
+		errc <- ev.ReadRawRecord(ctx, &raw)
 	}()
 
 	time.Sleep(100 * time.Millisecond)

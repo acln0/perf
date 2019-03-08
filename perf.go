@@ -9,7 +9,6 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"io"
 	"io/ioutil"
 	"os"
@@ -327,20 +326,19 @@ func (ev *Event) ReadGroupCount() (GroupCount, error) {
 	return gc, nil
 }
 
-// ReadRecord reads and decodes a sampling event from the ring buffer
-// associated with ev.
+// ReadRawRecord reads and decodes a sampling event from the ring buffer
+// associated with ev into rec.
 //
-// ReadRecord may be called concurrently with ReadCount or ReadGroupCount,
+// ReadRawRecord may be called concurrently with ReadCount or ReadGroupCount,
 // but not concurrently with Close or any other method.
-func (ev *Event) ReadRecord(ctx context.Context) (Record, error) {
+func (ev *Event) ReadRawRecord(ctx context.Context, rec *RawRecord) error {
 	if err := ev.ok(); err != nil {
-		return nil, err
+		return err
 	}
 	// Fast path: try reading from the ring buffer first. If there is
 	// a record there, we are done.
-	rec, ok := ev.readRecord()
-	if ok {
-		return rec, nil
+	if ev.readRawRecord(rec) {
+		return nil
 	}
 	// If the context has a deadline, and that deadline is in the future,
 	// use it to compute a timeout for ppoll(2). If the context is
@@ -352,7 +350,7 @@ func (ev *Event) ReadRecord(ctx context.Context) (Record, error) {
 		timeout = deadline.Sub(time.Now())
 		if timeout <= 0 {
 			<-ctx.Done()
-			return nil, ctx.Err()
+			return ctx.Err()
 		}
 	}
 	// Start a round of polling.
@@ -381,11 +379,11 @@ func (ev *Event) ReadRecord(ctx context.Context) (Record, error) {
 			var buf [8]byte
 			unix.Read(ev.evfd, buf[:])
 		}
-		return nil, err
+		return err
 	case resp := <-ev.pollresp:
 		if resp.err != nil {
 			// Polling failed. Nothing to do but report the error.
-			return nil, resp.err
+			return resp.err
 		}
 		if !resp.perfready {
 			// Here, we have not touched ev.evfd, there was no
@@ -397,28 +395,47 @@ func (ev *Event) ReadRecord(ctx context.Context) (Record, error) {
 			// case fired. In any case, ctx is expired, because
 			// we wouldn't be here otherwise.
 			<-ctx.Done()
-			return nil, ctx.Err()
+			return ctx.Err()
 		}
-		rec, _ := ev.readRecord()
-		return rec, nil
+		ev.readRawRecord(rec) // will succeed now
+		return nil
 	}
 }
 
-func (ev *Event) readRecord() (Record, bool) {
-	base := ev.meta.Data_offset
-	head := atomic.LoadUint64(&ev.meta.Data_head)
-	tail := atomic.LoadUint64(&ev.meta.Data_tail)
-
-	// TODO(acln): implement
-
-	fmt.Printf("base: %d\nhead: %d\ntail: %d\n", base, head, tail)
-	return nil, false
+// RawRecord is a raw overflow record.
+type RawRecord struct {
+	Header RecordHeader
+	Data   []byte
 }
 
-// ReadRawRecord reads a raw record from the memory mapped ring buffer
-// associated with ev.
-func (ev *Event) ReadRawRecord(raw *RawRecord) error {
-	panic("not implemented")
+// readRawRecord reads (non-blocking) a raw record into rec.
+//
+// The boolean return value signals whether a record was actually found.
+func (ev *Event) readRawRecord(rec *RawRecord) bool {
+	head := atomic.LoadUint64(&ev.meta.Data_head)
+	tail := atomic.LoadUint64(&ev.meta.Data_tail)
+	if head == tail {
+		return false
+	}
+
+	start := tail % uint64(len(ev.ringdata))
+	rec.Header = *(*RecordHeader)(unsafe.Pointer(&ev.ringdata[start]))
+	end := (tail + uint64(rec.Header.Size)) % uint64(len(ev.ringdata))
+
+	var data []byte
+	if end < start {
+		// Record straddles the ring buffer. Allocate, in order to
+		// return a contiguous area of memory to the caller.
+		data = make([]byte, rec.Header.Size)
+		n := copy(data, ev.ringdata[start:])
+		copy(data[n:], ev.ringdata[:int(rec.Header.Size)-n])
+	} else {
+		data = ev.ringdata[start:end]
+	}
+	rec.Data = data
+
+	atomic.AddUint64(&ev.meta.Data_tail, uint64(rec.Header.Size))
+	return true
 }
 
 func (ev *Event) poll() {
@@ -1113,17 +1130,6 @@ const (
 	BranchSampleNoCycles
 	BranchSampleSave
 )
-
-// RawRecord is a raw overflow record.
-type RawRecord struct {
-	Header RecordHeader
-	Data   []byte
-}
-
-// Decode decodes the raw record.
-func (rr *RawRecord) Decode() Record {
-	panic("not implemented")
-}
 
 // RecordType is the type of an overflow record.
 //
