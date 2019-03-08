@@ -6,7 +6,6 @@
 package perf
 
 import (
-	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -36,7 +35,7 @@ const (
 // AnyCPU configures the specified process/thread to be measured on any CPU.
 const AnyCPU = -1
 
-// OpenFlag is a set of flags for Open.
+// OpenFlag is a set of flags for Open. Values are |-ed together.
 type OpenFlag int
 
 // Flags for calls to Open.
@@ -46,26 +45,23 @@ const (
 	// the FlagFDOutput flag.
 	FlagNoGroup OpenFlag = unix.PERF_FLAG_FD_NO_GROUP
 
-	// FlagFDOutput re-routes the event's sampled output to be included in the
-	// memory mapped buffer of the event specified by the group parameter.
+	// FlagFDOutput re-routes the event's sampled output to be included
+	// in the memory mapped buffer of the event specified by the group
+	// parameter.
 	FlagFDOutput OpenFlag = unix.PERF_FLAG_FD_OUTPUT
 
-	// FlagPidCGroup activates per-container system-wide monitoring. In this
-	// case, a file descriptor opened on /dev/group/<x> must be passed
-	// as the pid parameter. Consult the perf_event_open man page for
-	// more details.
+	// FlagPidCGroup activates per-container system-wide monitoring. In
+	// this case, a file descriptor opened on /dev/group/<x> must be
+	// passed as the pid parameter. Consult the perf_event_open man page
+	// for more details.
 	FlagPidCGroup OpenFlag = unix.PERF_FLAG_PID_CGROUP
 
-	// flagCloexec configures the event file descriptor to be opened in
-	// close-on-exec mode.
-	flagCloexec OpenFlag = 1 << 3 // TODO(acln): missing from x/sys/unix
-)
-
-// Event states.
-const (
-	eventStateUninitialized = 0
-	eventStateOK            = 1
-	eventStateClosed        = 2
+	// flagCloexec configures the event file descriptor to be opened
+	// in close-on-exec mode. Package perf sets this flag by default on
+	// all file descriptors.
+	//
+	// TODO(acln): PERF_FLAG_FD_CLOEXEC is missing from x/sys/unix
+	flagCloexec OpenFlag = 1 << 3
 )
 
 type Event struct {
@@ -96,16 +92,25 @@ type Event struct {
 	evfd int
 
 	// pollreq communicates requests from ReadRecord to the poll goroutine
-	// associated with the ring. The values represent timeouts; zero
-	// means no timeout.
-	pollreq chan time.Duration
+	// associated with the ring.
+	pollreq chan pollreq
 
 	// pollresp receives responses from the poll goroutine associated
 	// with the ring, back to ReadRecord.
 	pollresp chan pollresp
 }
 
-const numRingPages = 128 // like the perf tool
+// Event states.
+const (
+	eventStateUninitialized = 0
+	eventStateOK            = 1
+	eventStateClosed        = 2
+)
+
+// numRingPages is the number of pages we map for the ring buffer (excluding
+// the meta page). This is the value the perf tool seems to use, at least
+// on systems with 4KiB pages. There is no other theory behind this number.
+const numRingPages = 128
 
 // Open opens the event configured by attr.
 //
@@ -135,6 +140,10 @@ const numRingPages = 128 // like the perf tool
 func Open(attr EventAttr, pid, cpu int, group *Event, flags OpenFlag) (*Event, error) {
 	groupfd := -1
 	if group != nil {
+		if err := group.ok(); err != nil {
+			return nil, err
+		}
+		// TODO(acln): this is not quite right: fix the race somehow.
 		groupfd = group.fd
 	}
 	flags |= flagCloexec
@@ -166,7 +175,7 @@ func Open(attr EventAttr, pid, cpu int, group *Event, flags OpenFlag) (*Event, e
 		ringdata: ringdata,
 		meta:     meta,
 		evfd:     evfd,
-		pollreq:  make(chan time.Duration),
+		pollreq:  make(chan pollreq),
 		pollresp: make(chan pollresp),
 	}
 	if group != nil {
@@ -328,43 +337,68 @@ func (ev *Event) ReadRecord(ctx context.Context) (Record, error) {
 	if err := ev.ok(); err != nil {
 		return nil, err
 	}
-
+	// Fast path: try reading from the ring buffer first. If there is
+	// a record there, we are done.
 	rec, ok := ev.readRecord()
 	if ok {
 		return rec, nil
 	}
-
+	// If the context has a deadline, and that deadline is in the future,
+	// use it to compute a timeout for ppoll(2). If the context is
+	// expired, bail out. Otherwise, the timeout is zero, which means
+	// no timeout.
 	var timeout time.Duration
 	deadline, ok := ctx.Deadline()
 	if ok {
 		timeout = deadline.Sub(time.Now())
 		if timeout <= 0 {
-			timeout = 1
+			<-ctx.Done()
+			return nil, ctx.Err()
 		}
 	}
-
-	ev.pollreq <- timeout
-
+	// Start a round of polling.
+	ev.pollreq <- pollreq{timeout: timeout}
+	// Await results.
 	select {
 	case <-ctx.Done():
-		// TODO(acln): document the wroteEvent + sawEvent machinery
-		wroteEvent := false
+		active := false
 		err := ctx.Err()
 		if err == context.Canceled {
+			// Initiate active wakeup. Send a signal on ev.evfd
+			// and wait for doPoll to wake up. doPoll might miss
+			// this signal, but that's okay: see below.
 			unix.Write(ev.evfd, nativeEndian1Bytes)
-			wroteEvent = true
+			active = true
 		}
-		resp := <-ev.pollresp
-		if wroteEvent && !resp.sawEvent {
-			if err := ev.drainEvent(); err != nil {
-				err = fmt.Errorf("internal error: bad eventfd state: got %v on read", err)
-				panic(err)
-			}
+		<-ev.pollresp
+		// We don't know if doPoll woke up due to our active wakeup
+		// or because it timed out. It doesn't make a difference.
+		// The important detail here is that doPoll does not touch
+		// ev.evfd (besides polling it for readiness). If we initiated
+		// active wakeup, we must restore the event file descriptor
+		// to quiescent state ourselves, in order to avoid a spurious
+		// wakeup during the next round of polling.
+		if active {
+			var buf [8]byte
+			unix.Read(ev.evfd, buf[:])
 		}
 		return nil, err
 	case resp := <-ev.pollresp:
 		if resp.err != nil {
+			// Polling failed. Nothing to do but report the error.
 			return nil, resp.err
+		}
+		if !resp.perfready {
+			// Here, we have not touched ev.evfd, there was no
+			// polling error, and ev.fd is not ready. Therefore,
+			// ppoll(2) must have timed out. The reason we
+			// are here is the following: doPoll woke up, and
+			// immediately sent us a pollresp, which won the
+			// race with <-ctx.Done(), such that this select
+			// case fired. In any case, ctx is expired, because
+			// we wouldn't be here otherwise.
+			<-ctx.Done()
+			return nil, ctx.Err()
 		}
 		rec, _ := ev.readRecord()
 		return rec, nil
@@ -391,16 +425,19 @@ func (ev *Event) ReadRawRecord(raw *RawRecord) error {
 func (ev *Event) poll() {
 	defer close(ev.pollresp)
 
-	for timeout := range ev.pollreq {
-		ev.pollresp <- ev.doPoll(timeout)
+	for req := range ev.pollreq {
+		ev.pollresp <- ev.doPoll(req)
 	}
 }
 
-func (ev *Event) doPoll(timeout time.Duration) pollresp {
+// doPoll executes one round of polling on ev.fd and ev.evfd.
+//
+// A req.timeout of zero is interpreted as "no timeout".
+func (ev *Event) doPoll(req pollreq) pollresp {
 	var systimeout *unix.Timespec
-	if timeout > 0 {
-		sec := timeout / time.Second
-		nsec := timeout - sec*time.Second
+	if req.timeout > 0 {
+		sec := req.timeout / time.Second
+		nsec := req.timeout - sec*time.Second
 		systimeout = &unix.Timespec{
 			Sec:  int64(sec),
 			Nsec: int64(nsec),
@@ -410,29 +447,27 @@ func (ev *Event) doPoll(timeout time.Duration) pollresp {
 		{Fd: int32(ev.fd), Events: unix.POLLIN},
 		{Fd: int32(ev.evfd), Events: unix.POLLIN},
 	}
+again:
 	_, err := unix.Ppoll(pollfds, systimeout, nil)
-	// TODO(acln): check revents
-	sawEvent := false
-	if evfdErr := ev.drainEvent(); evfdErr == nil {
-		sawEvent = true
+	if err == unix.EINTR {
+		goto again
 	}
-	return pollresp{sawEvent: sawEvent, err: err}
+	// If we are here and we have successfully woken up, it is for one
+	// of three reasons: we got POLLIN on ev.fd, the ppoll(2) timeout
+	// fired, or we got POLLIN on ev.evfd.
+	//
+	// Report if the perf fd is ready, and any errors except EINTR.
+	// The machinery is documented in more detail in ReadRecord.
+	return pollresp{
+		perfready: pollfds[0].Revents&unix.POLLIN != 0,
+		err:       os.NewSyscallError("ppoll", err),
+	}
 }
 
 var (
 	evfd1              = uint64(1)
 	nativeEndian1Bytes = (*[8]byte)(unsafe.Pointer(&evfd1))[:]
 )
-
-func (ev *Event) drainEvent() error {
-	var buf [8]byte
-	_, err := unix.Read(ev.evfd, buf[:])
-	if err == nil && !bytes.Equal(buf[:], nativeEndian1Bytes) {
-		err = fmt.Errorf("internal error: bad eventfd state: read %x, want 1", buf)
-		panic(err)
-	}
-	return err
-}
 
 // Close closes the event. Close must not be called concurrently with any
 // other methods on the Event.
@@ -445,9 +480,13 @@ func (ev *Event) Close() error {
 	return unix.Close(ev.fd)
 }
 
+type pollreq struct {
+	timeout time.Duration // timeout for ppoll(2): zero means no timeout
+}
+
 type pollresp struct {
-	sawEvent bool
-	err      error
+	perfready bool  // is the perf FD ready?
+	err       error // an *os.SyscallError, never contains EINTR
 }
 
 // An EventGroup configures a group of related events.
