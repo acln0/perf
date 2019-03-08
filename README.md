@@ -5,4 +5,4 @@ perf
 
 Temporary working tree for a tentative `golang.org/x/sys/linux/perf` package.
 
-Nothing works just yet, very rough state.
+Some things are working, but the state is still very rough.
