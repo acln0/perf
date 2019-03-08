@@ -403,9 +403,15 @@ func (ev *Event) ReadRawRecord(ctx context.Context, rec *RawRecord) error {
 }
 
 // RawRecord is a raw overflow record.
+//
+// TODO(acln): document that Data includes the Header bytes
 type RawRecord struct {
 	Header RecordHeader
 	Data   []byte
+}
+
+func (raw *RawRecord) fields() recordFields {
+	return recordFields(raw.Data[8:]) // first 8 bytes are header data
 }
 
 // readRawRecord reads (non-blocking) a raw record into rec.
@@ -1220,7 +1226,7 @@ type MmapRecord struct {
 
 func (mr *MmapRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	mr.RecordHeader = raw.Header
-	rf := recordFields(raw.Data)
+	rf := raw.fields()
 	rf.uint32(&mr.Pid, &mr.Tid)
 	rf.uint64(&mr.Addr)
 	rf.uint64(&mr.Len)
@@ -1238,7 +1244,7 @@ type LostRecord struct {
 
 func (lr *LostRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	lr.RecordHeader = raw.Header
-	rf := recordFields(raw.Data)
+	rf := raw.fields()
 	rf.uint64(&lr.ID)
 	rf.uint64(&lr.Lost)
 	rf.id(&lr.RecordID, ev)
@@ -1254,7 +1260,7 @@ type CommRecord struct {
 
 func (cr *CommRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	cr.RecordHeader = raw.Header
-	rf := recordFields(raw.Data)
+	rf := raw.fields()
 	rf.uint32(&cr.Pid, &cr.Tid)
 	rf.string(&cr.Comm)
 	rf.id(&cr.RecordID, ev)
@@ -1272,7 +1278,7 @@ type ExitRecord struct {
 
 func (er *ExitRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	er.RecordHeader = raw.Header
-	rf := recordFields(raw.Data)
+	rf := raw.fields()
 	rf.uint32(&er.Pid, &er.Ppid)
 	rf.uint32(&er.Tid, &er.Ptid)
 	rf.uint64(&er.Time)
@@ -1289,7 +1295,7 @@ type ThrottleRecord struct {
 
 func (tr *ThrottleRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	tr.RecordHeader = raw.Header
-	rf := recordFields(raw.Data)
+	rf := raw.fields()
 	rf.uint64(&tr.Time)
 	rf.uint64(&tr.ID)
 	rf.uint64(&tr.StreamID)
@@ -1306,7 +1312,7 @@ type UnthrottleRecord struct {
 
 func (ur *UnthrottleRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	ur.RecordHeader = raw.Header
-	rf := recordFields(raw.Data)
+	rf := raw.fields()
 	rf.uint64(&ur.Time)
 	rf.uint64(&ur.ID)
 	rf.uint64(&ur.StreamID)
@@ -1325,7 +1331,7 @@ type ForkRecord struct {
 
 func (fr *ForkRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	fr.RecordHeader = raw.Header
-	rf := recordFields(raw.Data)
+	rf := raw.fields()
 	rf.uint32(&fr.Pid, &fr.Ppid)
 	rf.uint32(&fr.Tid, &fr.Ptid)
 	rf.uint64(&fr.Time)
@@ -1342,7 +1348,7 @@ type ReadRecord struct {
 
 func (rr *ReadRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	rr.RecordHeader = raw.Header
-	rf := recordFields(raw.Data)
+	rf := raw.fields()
 	rf.uint32(&rr.Pid, &rr.Tid)
 	// TODO(acln): values
 }
@@ -1388,7 +1394,7 @@ type SampleRecord struct {
 
 func (sr *SampleRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	sr.RecordHeader = raw.Header
-	rf := recordFields(raw.Data)
+	rf := raw.fields()
 	rf.uint64If(ev.attr.SampleFormat.Identifier, &sr.Identifier)
 	rf.uint64If(ev.attr.SampleFormat.IP, &sr.IP)
 	rf.uint32If(ev.attr.SampleFormat.Tid, &sr.Pid, &sr.Tid)
@@ -1422,7 +1428,7 @@ type Mmap2Record struct {
 
 func (mr *Mmap2Record) DecodeFrom(raw *RawRecord, ev *Event) {
 	mr.RecordHeader = raw.Header
-	rf := recordFields(raw.Data)
+	rf := raw.fields()
 	rf.uint32(&mr.Pid, &mr.Tid)
 	rf.uint64(&mr.Addr)
 	rf.uint64(&mr.Len)
@@ -1445,7 +1451,7 @@ type AuxRecord struct {
 
 func (ar *AuxRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	ar.RecordHeader = raw.Header
-	rf := recordFields(raw.Data)
+	rf := raw.fields()
 	rf.uint64(&ar.AuxOffset)
 	rf.uint64(&ar.AuxSize)
 	rf.uint64(&ar.Flags)
@@ -1461,7 +1467,7 @@ type ItraceStartRecord struct {
 
 func (ir *ItraceStartRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	ir.RecordHeader = raw.Header
-	rf := recordFields(raw.Data)
+	rf := raw.fields()
 	rf.uint32(&ir.Pid, &ir.Tid)
 	rf.id(&ir.RecordID, ev)
 }
@@ -1473,7 +1479,7 @@ type SwitchRecord struct {
 
 func (sr *SwitchRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	sr.RecordHeader = raw.Header
-	rf := recordFields(raw.Data)
+	rf := raw.fields()
 	rf.id(&sr.RecordID, ev)
 }
 
@@ -1486,7 +1492,7 @@ type CPUWideSwitchRecord struct {
 
 func (sr *CPUWideSwitchRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	sr.RecordHeader = raw.Header
-	rf := recordFields(raw.Data)
+	rf := raw.fields()
 	rf.uint32(&sr.Pid, &sr.Tid)
 	rf.id(&sr.RecordID, ev)
 }
@@ -1504,7 +1510,7 @@ type NamespacesRecord struct {
 
 func (nr *NamespacesRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	nr.RecordHeader = raw.Header
-	rf := recordFields(raw.Data)
+	rf := raw.fields()
 	rf.uint32(&nr.Pid, &nr.Tid)
 	var num uint64
 	rf.uint64(&num)

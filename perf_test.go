@@ -6,7 +6,6 @@ package perf
 
 import (
 	"context"
-	"fmt"
 	"runtime"
 	"testing"
 	"time"
@@ -120,9 +119,10 @@ func TestTracepoint(t *testing.T) {
 	attr.Sample = 1
 	attr.Wakeup = 1
 	attr.SampleFormat = SampleFormat{
-		IP:   true,
-		Tid:  true,
-		Time: true,
+		Identifier: true,
+		IP:         true,
+		Tid:        true,
+		Time:       true,
 	}
 	attr.Options = EventOptions{
 		Watermark: true,
@@ -138,20 +138,17 @@ func TestTracepoint(t *testing.T) {
 		t.Fatalf("Enable: %v", err)
 	}
 
-	fmt.Println("calling getpid")
+	const N = 2
 
-	for i := 0; i < 100; i++ {
+	for i := 0; i < N; i++ {
 		unix.Getpid()
+		time.Sleep(100 * time.Millisecond)
 	}
-
-	fmt.Println("done: reading count")
 
 	count, err := ev.ReadCount()
 	if err != nil {
 		t.Fatalf("ReadCount: %v", err)
 	}
-
-	fmt.Printf("got count %d\n", count.Value)
 
 	t.Logf("got count value %d", count.Value)
 
@@ -163,14 +160,18 @@ func TestTracepoint(t *testing.T) {
 	go func() {
 		defer close(errc)
 
-		for i := 0; i < 100; i++ {
+		for i := 0; i < N; i++ {
 			var raw RawRecord
 			err := ev.ReadRawRecord(ctx, &raw)
 			if err != nil {
 				errc <- err
 				return
 			}
-			t.Logf("got raw record: %+v", raw)
+			if raw.Header.Type == 9 {
+				var sr SampleRecord
+				sr.DecodeFrom(&raw, ev)
+				t.Logf("got sample record %+v", sr)
+			}
 		}
 	}()
 
