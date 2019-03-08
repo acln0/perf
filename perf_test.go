@@ -6,6 +6,7 @@ package perf
 
 import (
 	"context"
+	"fmt"
 	"runtime"
 	"testing"
 	"time"
@@ -116,10 +117,16 @@ func TestTracepoint(t *testing.T) {
 		t.Fatalf("NewTracepoint: %v", err)
 	}
 
-	attr.SampleFormat.Identifier = true
-	attr.Options.Disabled = true
-	attr.Options.ExcludeGuest = true
-	attr.Options.EnableOnExec = true
+	attr.Sample = 1
+	attr.Wakeup = 1
+	attr.SampleFormat = SampleFormat{
+		IP:   true,
+		Tid:  true,
+		Time: true,
+	}
+	attr.Options = EventOptions{
+		Watermark: true,
+	}
 
 	ev, err := Open(attr, CallingThread, AnyCPU, nil, 0)
 	if err != nil {
@@ -131,12 +138,20 @@ func TestTracepoint(t *testing.T) {
 		t.Fatalf("Enable: %v", err)
 	}
 
-	unix.Getpid()
+	fmt.Println("calling getpid")
+
+	for i := 0; i < 100; i++ {
+		unix.Getpid()
+	}
+
+	fmt.Println("done: reading count")
 
 	count, err := ev.ReadCount()
 	if err != nil {
 		t.Fatalf("ReadCount: %v", err)
 	}
+
+	fmt.Printf("got count %d\n", count.Value)
 
 	t.Logf("got count value %d", count.Value)
 
@@ -146,8 +161,16 @@ func TestTracepoint(t *testing.T) {
 	errc := make(chan error)
 
 	go func() {
-		var raw RawRecord
-		errc <- ev.ReadRawRecord(ctx, &raw)
+		for i := 0; i < 100; i++ {
+			var raw RawRecord
+			err := ev.ReadRawRecord(ctx, &raw)
+			if err != nil {
+				errc <- err
+				return
+			}
+			t.Logf("got raw record: %+v", raw)
+		}
+		close(errc)
 	}()
 
 	time.Sleep(100 * time.Millisecond)
