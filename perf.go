@@ -1156,21 +1156,77 @@ func (rh RecordHeader) Header() RecordHeader { return rh }
 //
 // TODO(acln): document the relationship between this and SampleFormat.
 type RecordID struct {
-	Pid, Tid uint32
-	Time     uint64
-	ID       uint64
-	StreamID uint64
-	CPU, Res uint32
+	Pid        uint32
+	Tid        uint32
+	Time       uint64
+	ID         uint64
+	StreamID   uint64
+	CPU        uint32
+	Res        uint32
+	Identifier uint64
+}
+
+type recordFields []byte
+
+func (rf *recordFields) uint64(v *uint64) {
+	*v = *(*uint64)(unsafe.Pointer(&(*rf)[0]))
+	*rf = (*rf)[8:]
+}
+
+func (rf *recordFields) uint64If(cond bool, v *uint64) {
+	if cond {
+		rf.uint64(v)
+	}
+}
+
+func (rf *recordFields) uint32(a, b *uint32) {
+	*a = *(*uint32)(unsafe.Pointer(&(*rf)[0]))
+	*b = *(*uint32)(unsafe.Pointer(&(*rf)[4]))
+	*rf = (*rf)[8:]
+}
+
+func (rf *recordFields) uint32If(cond bool, a, b *uint32) {
+	if cond {
+		rf.uint32(a, b)
+	}
+}
+
+func (rf *recordFields) string(s *string) {
+	*s = "TODO"
+}
+
+func (rf *recordFields) id(id *RecordID, ev *Event) {
+	if !ev.attr.Options.SampleIDAll {
+		return
+	}
+	rf.uint32If(ev.attr.SampleFormat.Tid, &id.Pid, &id.Tid)
+	rf.uint64If(ev.attr.SampleFormat.Time, &id.Time)
+	rf.uint64If(ev.attr.SampleFormat.ID, &id.ID)
+	rf.uint64If(ev.attr.SampleFormat.StreamID, &id.StreamID)
+	rf.uint32If(ev.attr.SampleFormat.CPU, &id.CPU, &id.Res)
+	rf.uint64If(ev.attr.SampleFormat.Identifier, &id.Identifier)
 }
 
 type MmapRecord struct {
 	RecordHeader
-	Pid, Tid uint32
+	Pid      uint32
+	Tid      uint32
 	Addr     uint64
 	Len      uint64
 	Pgoff    uint64
 	Filename string
 	RecordID
+}
+
+func (mr *MmapRecord) DecodeFrom(raw *RawRecord, ev *Event) {
+	mr.RecordHeader = raw.Header
+	rf := recordFields(raw.Data)
+	rf.uint32(&mr.Pid, &mr.Tid)
+	rf.uint64(&mr.Addr)
+	rf.uint64(&mr.Len)
+	rf.uint64(&mr.Pgoff)
+	rf.string(&mr.Filename)
+	rf.id(&mr.RecordID, ev)
 }
 
 type LostRecord struct {
@@ -1180,12 +1236,28 @@ type LostRecord struct {
 	RecordID
 }
 
+func (lr *LostRecord) DecodeFrom(raw *RawRecord, ev *Event) {
+	lr.RecordHeader = raw.Header
+	rf := recordFields(raw.Data)
+	rf.uint64(&lr.ID)
+	rf.uint64(&lr.Lost)
+	rf.id(&lr.RecordID, ev)
+}
+
 type CommRecord struct {
 	RecordHeader
 	Pid  uint32
 	Tid  uint32
 	Comm string
 	RecordID
+}
+
+func (cr *CommRecord) DecodeFrom(raw *RawRecord, ev *Event) {
+	cr.RecordHeader = raw.Header
+	rf := recordFields(raw.Data)
+	rf.uint32(&cr.Pid, &cr.Tid)
+	rf.string(&cr.Comm)
+	rf.id(&cr.RecordID, ev)
 }
 
 type ExitRecord struct {
@@ -1198,6 +1270,15 @@ type ExitRecord struct {
 	RecordID
 }
 
+func (er *ExitRecord) DecodeFrom(raw *RawRecord, ev *Event) {
+	er.RecordHeader = raw.Header
+	rf := recordFields(raw.Data)
+	rf.uint32(&er.Pid, &er.Ppid)
+	rf.uint32(&er.Tid, &er.Ptid)
+	rf.uint64(&er.Time)
+	rf.id(&er.RecordID, ev)
+}
+
 type ThrottleRecord struct {
 	RecordHeader
 	Time     uint64
@@ -1206,12 +1287,30 @@ type ThrottleRecord struct {
 	RecordID
 }
 
+func (tr *ThrottleRecord) DecodeFrom(raw *RawRecord, ev *Event) {
+	tr.RecordHeader = raw.Header
+	rf := recordFields(raw.Data)
+	rf.uint64(&tr.Time)
+	rf.uint64(&tr.ID)
+	rf.uint64(&tr.StreamID)
+	rf.id(&tr.RecordID, ev)
+}
+
 type UnthrottleRecord struct {
 	RecordHeader
 	Time     uint64
 	ID       uint64
 	StreamID uint64
 	RecordID
+}
+
+func (ur *UnthrottleRecord) DecodeFrom(raw *RawRecord, ev *Event) {
+	ur.RecordHeader = raw.Header
+	rf := recordFields(raw.Data)
+	rf.uint64(&ur.Time)
+	rf.uint64(&ur.ID)
+	rf.uint64(&ur.StreamID)
+	rf.id(&ur.RecordID, ev)
 }
 
 type ForkRecord struct {
@@ -1224,12 +1323,28 @@ type ForkRecord struct {
 	RecordID
 }
 
+func (fr *ForkRecord) DecodeFrom(raw *RawRecord, ev *Event) {
+	fr.RecordHeader = raw.Header
+	rf := recordFields(raw.Data)
+	rf.uint32(&fr.Pid, &fr.Ppid)
+	rf.uint32(&fr.Tid, &fr.Ptid)
+	rf.uint64(&fr.Time)
+	rf.id(&fr.RecordID, ev)
+}
+
 type ReadRecord struct {
 	RecordHeader
 	Pid    uint32
 	Tid    uint32
 	Values ReadFormat
 	RecordID
+}
+
+func (rr *ReadRecord) DecodeFrom(raw *RawRecord, ev *Event) {
+	rr.RecordHeader = raw.Header
+	rf := recordFields(raw.Data)
+	rf.uint32(&rr.Pid, &rr.Tid)
+	// TODO(acln): values
 }
 
 type SampleRecord struct {
@@ -1271,6 +1386,23 @@ type SampleRecord struct {
 	PhysAddr         uint64
 }
 
+func (sr *SampleRecord) DecodeFrom(raw *RawRecord, ev *Event) {
+	sr.RecordHeader = raw.Header
+	rf := recordFields(raw.Data)
+	rf.uint64If(ev.attr.SampleFormat.Identifier, &sr.Identifier)
+	rf.uint64If(ev.attr.SampleFormat.IP, &sr.IP)
+	rf.uint32If(ev.attr.SampleFormat.Tid, &sr.Pid, &sr.Tid)
+	rf.uint64If(ev.attr.SampleFormat.Time, &sr.Time)
+	rf.uint64If(ev.attr.SampleFormat.Addr, &sr.Addr)
+	rf.uint64If(ev.attr.SampleFormat.ID, &sr.ID)
+	rf.uint64If(ev.attr.SampleFormat.StreamID, &sr.StreamID)
+	rf.uint32If(ev.attr.SampleFormat.CPU, &sr.CPU, &sr.Res)
+	rf.uint64If(ev.attr.SampleFormat.Period, &sr.Period)
+	// TODO(acln): values
+	// TODO(acln): callchain
+	// TODO(acln): non-ABI bits
+}
+
 type Mmap2Record struct {
 	RecordHeader
 	Pid           uint32
@@ -1288,12 +1420,36 @@ type Mmap2Record struct {
 	RecordID
 }
 
+func (mr *Mmap2Record) DecodeFrom(raw *RawRecord, ev *Event) {
+	mr.RecordHeader = raw.Header
+	rf := recordFields(raw.Data)
+	rf.uint32(&mr.Pid, &mr.Tid)
+	rf.uint64(&mr.Addr)
+	rf.uint64(&mr.Len)
+	rf.uint64(&mr.Pgoff)
+	rf.uint32(&mr.Maj, &mr.Min)
+	rf.uint64(&mr.Ino)
+	rf.uint64(&mr.InoGeneration)
+	rf.uint32(&mr.Prot, &mr.Flags)
+	rf.string(&mr.Filename)
+	rf.id(&mr.RecordID, ev)
+}
+
 type AuxRecord struct {
 	RecordHeader
 	AuxOffset uint64
 	AuxSize   uint64
 	Flags     uint64
 	RecordID
+}
+
+func (ar *AuxRecord) DecodeFrom(raw *RawRecord, ev *Event) {
+	ar.RecordHeader = raw.Header
+	rf := recordFields(raw.Data)
+	rf.uint64(&ar.AuxOffset)
+	rf.uint64(&ar.AuxSize)
+	rf.uint64(&ar.Flags)
+	rf.id(&ar.RecordID, ev)
 }
 
 type ItraceStartRecord struct {
@@ -1303,9 +1459,22 @@ type ItraceStartRecord struct {
 	RecordID
 }
 
+func (ir *ItraceStartRecord) DecodeFrom(raw *RawRecord, ev *Event) {
+	ir.RecordHeader = raw.Header
+	rf := recordFields(raw.Data)
+	rf.uint32(&ir.Pid, &ir.Tid)
+	rf.id(&ir.RecordID, ev)
+}
+
 type SwitchRecord struct {
 	RecordHeader
 	RecordID
+}
+
+func (sr *SwitchRecord) DecodeFrom(raw *RawRecord, ev *Event) {
+	sr.RecordHeader = raw.Header
+	rf := recordFields(raw.Data)
+	rf.id(&sr.RecordID, ev)
 }
 
 type CPUWideSwitchRecord struct {
@@ -1313,6 +1482,13 @@ type CPUWideSwitchRecord struct {
 	Pid uint32
 	Tid uint32
 	RecordID
+}
+
+func (sr *CPUWideSwitchRecord) DecodeFrom(raw *RawRecord, ev *Event) {
+	sr.RecordHeader = raw.Header
+	rf := recordFields(raw.Data)
+	rf.uint32(&sr.Pid, &sr.Tid)
+	rf.id(&sr.RecordID, ev)
 }
 
 type NamespacesRecord struct {
@@ -1324,6 +1500,20 @@ type NamespacesRecord struct {
 		Inode uint64
 	}
 	RecordID
+}
+
+func (nr *NamespacesRecord) DecodeFrom(raw *RawRecord, ev *Event) {
+	nr.RecordHeader = raw.Header
+	rf := recordFields(raw.Data)
+	rf.uint32(&nr.Pid, &nr.Tid)
+	var num uint64
+	rf.uint64(&num)
+	nr.Namespaces = make([]struct{ Dev, Inode uint64 }, num)
+	for i := 0; i < int(num); i++ {
+		rf.uint64(&nr.Namespaces[i].Dev)
+		rf.uint64(&nr.Namespaces[i].Inode)
+	}
+	rf.id(&nr.RecordID, ev)
 }
 
 // A File wraps a perf.data file and decodes the records therein.
