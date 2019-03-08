@@ -633,9 +633,9 @@ func (attr EventAttr) sysAttr() *unix.PerfEventAttr {
 		Size:               uint32(unsafe.Sizeof(unix.PerfEventAttr{})),
 		Config:             attr.Config,
 		Sample:             attr.Sample,
-		Sample_type:        attr.SampleFormat.Marshal(),
-		Read_format:        attr.ReadFormat.Marshal(),
-		Bits:               attr.Options.Marshal(),
+		Sample_type:        attr.SampleFormat.marshal(),
+		Read_format:        attr.ReadFormat.marshal(),
+		Bits:               attr.Options.marshal(),
 		Wakeup:             attr.Wakeup,
 		Bp_type:            attr.BreakpointType,
 		Ext1:               attr.Config1,
@@ -932,8 +932,8 @@ type SampleFormat struct {
 	PhysAddr    bool
 }
 
-// Marshal packs the SampleFormat into a uint64.
-func (st SampleFormat) Marshal() uint64 {
+// marshal packs the SampleFormat into a uint64.
+func (st SampleFormat) marshal() uint64 {
 	// Always keep this in sync with the type definition above.
 	fields := []bool{
 		st.IP,
@@ -1001,8 +1001,8 @@ func (f ReadFormat) groupReadCountSize() int {
 	return size
 }
 
-// Marshal marshals the ReadFormat into a uint64.
-func (f ReadFormat) Marshal() uint64 {
+// marshal marshals the ReadFormat into a uint64.
+func (f ReadFormat) marshal() uint64 {
 	// Always keep this in sync with the type definition above.
 	fields := []bool{
 		f.TotalTimeEnabled,
@@ -1045,7 +1045,7 @@ type EventOptions struct {
 	Namespaces             bool           // include namespaces data
 }
 
-func (opt EventOptions) Marshal() uint64 {
+func (opt EventOptions) marshal() uint64 {
 	fields := []bool{
 		opt.Disabled,
 		opt.Inherit,
