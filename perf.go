@@ -519,8 +519,6 @@ again:
 	}
 }
 
-var ()
-
 // Close closes the event. Close must not be called concurrently with any
 // other methods on the Event.
 func (ev *Event) Close() error {
