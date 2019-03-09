@@ -23,19 +23,56 @@ func ioctlDisable(fd int) error {
 	return wrapIoctlError("PERF_EVENT_IOC_DISABLE", err)
 }
 
+func ioctlRefresh(fd int) error {
+	err := ioctlNoArg(fd, unix.PERF_EVENT_IOC_REFRESH)
+	return wrapIoctlError("PERF_EVENT_IOC_REFRESH", err)
+}
+
 func ioctlReset(fd int) error {
 	err := ioctlNoArg(fd, unix.PERF_EVENT_IOC_RESET)
 	return wrapIoctlError("PERF_EVENT_IOC_RESET", err)
 }
 
-// TODO(acln): add remaining ioctls as needed
+func ioctlPeriod(fd int, p *uint64) error {
+	err := ioctlPointer(fd, unix.PERF_EVENT_IOC_PERIOD, unsafe.Pointer(p))
+	return wrapIoctlError("PERF_EVENT_IOC_PERIOD", err)
+}
+
+func ioctlSetOutput(fd int, target int) error {
+	err := ioctlInt(fd, unix.PERF_EVENT_IOC_SET_OUTPUT, uintptr(target))
+	return wrapIoctlError("PERF_EVENT_IOC_SET_OUTPUT", err)
+}
+
+// TODO(acln): PERF_EVENT_IOC_SET_FILTER
+
+func ioctlID(fd int, id *uint64) error {
+	err := ioctlPointer(fd, unix.PERF_EVENT_IOC_ID, unsafe.Pointer(id))
+	return wrapIoctlError("PERF_EVENT_IOC_ID", err)
+}
+
+func ioctlSetBPF(fd int, progfd uint32) error {
+	err := ioctlInt(fd, unix.PERF_EVENT_IOC_SET_BPF, uintptr(progfd))
+	return wrapIoctlError("PERF_EVENT_IOC_SET_BPF", err)
+}
+
+func ioctlPauseOutput(fd int, val uint32) error {
+	err := ioctlInt(fd, unix.PERF_EVENT_IOC_PAUSE_OUTPUT, uintptr(val))
+	return wrapIoctlError("PEF_EVENT_IOC_PAUSE_OUTPUT", err)
+}
+
+// TODO(acln): PERF_EVENT_IOC_QUERY_BPF
+
+func ioctlModifyAttributes(fd int, attr *unix.PerfEventAttr) error {
+	err := ioctlPointer(fd, unix.PERF_EVENT_IOC_MODIFY_ATTRIBUTES, unsafe.Pointer(attr))
+	return wrapIoctlError("PERF_EVENT_IOC_MODIFY_ATTRIBUTES", err)
+}
 
 func ioctlNoArg(fd, number int) error {
 	return ioctlInt(fd, number, 0)
 }
 
-func ioctlInt(fd int, number int, arg int) error {
-	_, _, e := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), uintptr(number), uintptr(arg))
+func ioctlInt(fd int, number int, arg uintptr) error {
+	_, _, e := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), uintptr(number), arg)
 	if e != 0 {
 		return e
 	}

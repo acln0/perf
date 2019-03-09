@@ -214,6 +214,8 @@ func (ev *Event) Disable() error {
 	return ioctlDisable(ev.fd)
 }
 
+// TODO(acln): (*Event).Refresh, which means handling POLLHUP
+
 // Reset resets the counters associated with the event.
 func (ev *Event) Reset() error {
 	if err := ev.ok(); err != nil {
@@ -222,7 +224,78 @@ func (ev *Event) Reset() error {
 	return ioctlReset(ev.fd)
 }
 
-// TODO(acln): add remaining ioctls as methods on *Event.
+// UpdatePeriod updates the overflow period for the event. On older kernels,
+// the new period does not take effect until after the next overflow.
+func (ev *Event) UpdatePeriod(p uint64) error {
+	if err := ev.ok(); err != nil {
+		return err
+	}
+	return ioctlPeriod(ev.fd, &p)
+}
+
+// SetOutput tells the kernel to report event notifications to the specified
+// target Event rather than ev. ev and target must be on the same CPU.
+//
+// If target is nil, output from ev is ignored.
+func (ev *Event) SetOutput(target *Event) error {
+	if err := ev.ok(); err != nil {
+		return err
+	}
+	if target == nil {
+		return ioctlSetOutput(ev.fd, -1)
+	}
+	if err := target.ok(); err != nil {
+		return err
+	}
+	return ioctlSetOutput(ev.fd, target.fd)
+}
+
+// TODO(acln): (*Event).SetFtraceFilter
+
+// ID returns the unique event ID value for ev.
+func (ev *Event) ID() (uint64, error) {
+	if err := ev.ok(); err != nil {
+		return 0, err
+	}
+	var val uint64
+	err := ioctlID(ev.fd, &val)
+	return val, err
+}
+
+// SetBPF attaches a BPF program to ev, which must be a kprobe tracepoint
+// event. progfd is the file descriptor associated with the BPF program.
+func (ev *Event) SetBPF(progfd uint32) error {
+	if err := ev.ok(); err != nil {
+		return err
+	}
+	return ioctlSetBPF(ev.fd, progfd)
+}
+
+// PauseOutput pauses the output from ev.
+func (ev *Event) PauseOutput() error {
+	if err := ev.ok(); err != nil {
+		return err
+	}
+	return ioctlPauseOutput(ev.fd, 1)
+}
+
+// ResumeOutput resumes output from ev.
+func (ev *Event) ResumeOutput() error {
+	if err := ev.ok(); err != nil {
+		return err
+	}
+	return ioctlPauseOutput(ev.fd, 0)
+}
+
+// TODO(acln): PERF_EVENT_IOC_QUERY_BPF
+
+// ModifyAttributes modifies the attributes of an event.
+func (ev *Event) ModifyAttributes(attr EventAttr) error {
+	if err := ev.ok(); err != nil {
+		return err
+	}
+	return ioctlModifyAttributes(ev.fd, attr.sysAttr())
+}
 
 var errGroupEvent = errors.New("calling ReadCount on group Event")
 
