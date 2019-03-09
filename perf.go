@@ -56,9 +56,7 @@ const (
 	// cloexec configures the event file descriptor to be opened in
 	// close-on-exec mode. Package perf sets this flag by default on
 	// all file descriptors.
-	//
-	// TODO(acln): PERF_FLAG_FD_CLOEXEC is missing from x/sys/unix
-	cloexec Flag = 1 << 3
+	cloexec Flag = unix.PERF_FLAG_FD_CLOEXEC
 )
 
 type Event struct {
@@ -671,8 +669,6 @@ type EventAttr struct {
 
 	// SampleMaxStack is the maximum number of frame pointers in a call
 	// chain. It should be < /proc/sys/kernel/perf_event_max_stack.
-	//
-	// TODO(acln): this field does not exist in unix.PerfEventAttr.
 	SampleMaxStack uint16
 }
 
@@ -695,6 +691,7 @@ func (attr EventAttr) sysAttr() *unix.PerfEventAttr {
 		Clockid:            attr.ClockID,
 		Sample_regs_intr:   attr.SampleRegsInt,
 		Aux_watermark:      attr.AuxWatermark,
+		Sample_max_stack:   attr.SampleMaxStack,
 	}
 }
 
@@ -791,7 +788,7 @@ const (
 	AlignmentFaults SoftwareCounter = unix.PERF_COUNT_SW_ALIGNMENT_FAULTS
 	EmulationFaults SoftwareCounter = unix.PERF_COUNT_SW_EMULATION_FAULTS
 	Dummy           SoftwareCounter = unix.PERF_COUNT_SW_DUMMY
-	BPFOutput       SoftwareCounter = 10 // TODO(acln): missing from x/sys/unix
+	BPFOutput       SoftwareCounter = unix.PERF_COUNT_SW_BPF_OUTPUT
 )
 
 func (swc SoftwareCounter) Label() string {
@@ -1144,33 +1141,29 @@ type BranchSampleFormat uint32
 
 // Branch sample types.
 const (
-	BranchSampleUser         BranchSampleFormat = unix.PERF_SAMPLE_BRANCH_USER
-	BranchSampleKernel       BranchSampleFormat = unix.PERF_SAMPLE_BRANCH_KERNEL
-	BranchSampleHypervisor   BranchSampleFormat = unix.PERF_SAMPLE_BRANCH_HV
-	BranchSampleAny          BranchSampleFormat = unix.PERF_SAMPLE_BRANCH_ANY
-	BranchSampleAnyCall      BranchSampleFormat = unix.PERF_SAMPLE_BRANCH_ANY_CALL
-	BranchSampleAnyReturn    BranchSampleFormat = unix.PERF_SAMPLE_BRANCH_ANY_RETURN
-	BranchSampleIndirectCall BranchSampleFormat = unix.PERF_SAMPLE_BRANCH_IND_CALL
-
-	BranchSampleAbortTransaction BranchSampleFormat = 1 << (7 + iota) // TODO(acln): missing from x/sys/unix
-	BranchSampleInTransaction
-	BranchSampleNoTransaction
-	BranchSampleCond
-	BranchSampleCallStack
-	BranchSampleIndirectJump
-	BranchSampleCall
-	BranchSampleNoFlags
-	BranchSampleNoCycles
-	BranchSampleSave
+	BranchSampleUser             BranchSampleFormat = unix.PERF_SAMPLE_BRANCH_USER
+	BranchSampleKernel           BranchSampleFormat = unix.PERF_SAMPLE_BRANCH_KERNEL
+	BranchSampleHypervisor       BranchSampleFormat = unix.PERF_SAMPLE_BRANCH_HV
+	BranchSampleAny              BranchSampleFormat = unix.PERF_SAMPLE_BRANCH_ANY
+	BranchSampleAnyCall          BranchSampleFormat = unix.PERF_SAMPLE_BRANCH_ANY_CALL
+	BranchSampleAnyReturn        BranchSampleFormat = unix.PERF_SAMPLE_BRANCH_ANY_RETURN
+	BranchSampleIndirectCall     BranchSampleFormat = unix.PERF_SAMPLE_BRANCH_IND_CALL
+	BranchSampleAbortTransaction BranchSampleFormat = unix.PERF_SAMPLE_BRANCH_ABORT_TX
+	BranchSampleInTransaction    BranchSampleFormat = unix.PERF_SAMPLE_BRANCH_IN_TX
+	BranchSampleNoTransaction    BranchSampleFormat = unix.PERF_SAMPLE_BRANCH_NO_TX
+	BranchSampleCond             BranchSampleFormat = unix.PERF_SAMPLE_BRANCH_COND
+	BranchSampleCallStack        BranchSampleFormat = unix.PERF_SAMPLE_BRANCH_CALL_STACK
+	BranchSampleIndirectJump     BranchSampleFormat = unix.PERF_SAMPLE_BRANCH_IND_JUMP
+	BranchSampleCall             BranchSampleFormat = unix.PERF_SAMPLE_BRANCH_CALL
+	BranchSampleNoFlags          BranchSampleFormat = unix.PERF_SAMPLE_BRANCH_NO_FLAGS
+	BranchSampleNoCycles         BranchSampleFormat = unix.PERF_SAMPLE_BRANCH_NO_CYCLES
+	BranchSampleSave             BranchSampleFormat = unix.PERF_SAMPLE_BRANCH_TYPE_SAVE
 )
 
 // RecordType is the type of an overflow record.
 //
 // TODO(acln): add these constants
 type RecordType uint32
-
-// Known record types.
-const ()
 
 // RecordHeader is the header present in every overflow record.
 type RecordHeader struct {
