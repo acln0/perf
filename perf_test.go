@@ -17,7 +17,7 @@ import (
 
 func TestInstructionCount(t *testing.T) {
 	attr := Instructions.EventAttr()
-	attr.ReadFormat = ReadFormat{
+	attr.CountFormat = CountFormat{
 		TotalTimeEnabled: true,
 		TotalTimeRunning: true,
 		ID:               true,
@@ -61,7 +61,7 @@ func TestGroup(t *testing.T) {
 	defer runtime.UnlockOSThread()
 
 	insns := Instructions.EventAttr()
-	insns.ReadFormat = ReadFormat{
+	insns.CountFormat = CountFormat{
 		TotalTimeEnabled: true,
 		TotalTimeRunning: true,
 		Group:            true,
@@ -124,7 +124,7 @@ func TestTracepoint(t *testing.T) {
 		Tid:        true,
 		Time:       true,
 	}
-	attr.Options = EventOptions{
+	attr.Options = Options{
 		Watermark: true,
 	}
 

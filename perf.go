@@ -8,6 +8,7 @@ package perf
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"os"
@@ -86,12 +87,12 @@ type Event struct {
 	// unblock calls to ppoll(2) on the perf fd.
 	evfd int
 
-	// pollreq communicates requests from ReadRecord to the poll goroutine
+	// pollreq communicates requests from ReadRawRecord to the poll goroutine
 	// associated with the ring.
 	pollreq chan pollreq
 
 	// pollresp receives responses from the poll goroutine associated
-	// with the ring, back to ReadRecord.
+	// with the ring, back to ReadRawRecord.
 	pollresp chan pollresp
 }
 
@@ -164,6 +165,7 @@ func Open(attr EventAttr, pid, cpu int, group *Event, flags Flag) (*Event, error
 		return nil, os.NewSyscallError("eventfd", err)
 	}
 	ev := &Event{
+		state:    eventStateOK,
 		fd:       fd,
 		attr:     attr,
 		ring:     ring,
@@ -176,17 +178,15 @@ func Open(attr EventAttr, pid, cpu int, group *Event, flags Flag) (*Event, error
 	if group != nil {
 		group.group = append(group.group, ev)
 	}
-	atomic.StoreInt32(&ev.state, eventStateOK)
 	go ev.poll() // TODO(acln): start this lazily somehow?
 	return ev, nil
 }
 
 func (ev *Event) ok() error {
-	if ev == nil {
+	if ev == nil { // TODO(acln): remove this check perhaps?
 		return os.ErrInvalid
 	}
-	state := atomic.LoadInt32(&ev.state)
-	switch state {
+	switch ev.state {
 	case eventStateUninitialized:
 		return os.ErrInvalid
 	case eventStateOK:
@@ -297,46 +297,44 @@ func (ev *Event) ModifyAttributes(attr EventAttr) error {
 
 var errGroupEvent = errors.New("calling ReadCount on group Event")
 
-// ReadCount reads a single count. If the Event was configured with
-// ReadFormat.Group, ReadCount returns an error.
+// ReadCount reads the measurement associated with ev. If the Event was
+// configured with CountFormat.Group, ReadCount returns an error.
 func (ev *Event) ReadCount() (Count, error) {
 	var c Count
 	if err := ev.ok(); err != nil {
 		return c, err
 	}
-	if ev.attr.ReadFormat.Group {
+	if ev.attr.CountFormat.Group {
 		return c, errGroupEvent
 	}
 	// TODO(acln): use rdpmc on x86 instead of read(2)?
-	buf := make([]byte, ev.attr.ReadFormat.readSize())
+	buf := make([]byte, ev.attr.CountFormat.readSize())
 	_, err := unix.Read(ev.fd, buf)
 	if err != nil {
 		return c, os.NewSyscallError("read", err)
 	}
 	f := fields(buf)
 	f.uint64(&c.Value)
-	f.durationIf(ev.attr.ReadFormat.TotalTimeEnabled, &c.TimeEnabled)
-	f.durationIf(ev.attr.ReadFormat.TotalTimeRunning, &c.TimeRunning)
-	f.uint64If(ev.attr.ReadFormat.ID, &c.ID)
+	f.durationIf(ev.attr.CountFormat.TotalTimeEnabled, &c.TimeEnabled)
+	f.durationIf(ev.attr.CountFormat.TotalTimeRunning, &c.TimeRunning)
+	f.uint64If(ev.attr.CountFormat.ID, &c.ID)
 	return c, err
 }
 
 var errSingleEvent = errors.New("calling ReadGroupCount on non-group Event")
 
-// ReadGroupCount reads the counts associated with ev.
-//
-// If the Event was not configued with ReadFormat.Group, ReadGroupCount
-// returns an error.
+// ReadGroupCount reads the measurements associated with ev. If the Event
+// was not configued with CountFormat.Group, ReadGroupCount returns an error.
 func (ev *Event) ReadGroupCount() (GroupCount, error) {
 	var gc GroupCount
 	if err := ev.ok(); err != nil {
 		return gc, err
 	}
-	if !ev.attr.ReadFormat.Group {
+	if !ev.attr.CountFormat.Group {
 		return gc, errSingleEvent
 	}
-	headerSize := ev.attr.ReadFormat.groupReadHeaderSize()
-	countsSize := (1 + len(ev.group)) * ev.attr.ReadFormat.groupReadCountSize()
+	headerSize := ev.attr.CountFormat.groupReadHeaderSize()
+	countsSize := (1 + len(ev.group)) * ev.attr.CountFormat.groupReadCountSize()
 	buf := make([]byte, headerSize+countsSize)
 	_, err := unix.Read(ev.fd, buf)
 	if err != nil {
@@ -345,28 +343,64 @@ func (ev *Event) ReadGroupCount() (GroupCount, error) {
 	f := fields(buf)
 	var nr uint64
 	f.uint64(&nr)
-	f.durationIf(ev.attr.ReadFormat.TotalTimeEnabled, &gc.TimeEnabled)
-	f.durationIf(ev.attr.ReadFormat.TotalTimeRunning, &gc.TimeRunning)
+	f.durationIf(ev.attr.CountFormat.TotalTimeEnabled, &gc.TimeEnabled)
+	f.durationIf(ev.attr.CountFormat.TotalTimeRunning, &gc.TimeRunning)
 	gc.Counts = make([]struct{ Value, ID uint64 }, nr)
 	for i := 0; i < int(nr); i++ {
 		f.uint64(&gc.Counts[i].Value)
-		f.uint64If(ev.attr.ReadFormat.ID, &gc.Counts[i].ID)
+		f.uint64If(ev.attr.CountFormat.ID, &gc.Counts[i].ID)
 	}
 	return gc, nil
 }
 
-// ReadRawRecord reads and decodes a sampling event from the ring buffer
-// associated with ev into rec.
+type pollreq struct {
+	// timeout is the timeout for ppoll(2): zero means no timeout
+	timeout time.Duration
+}
+
+type pollresp struct {
+	// perfready indicates if the perf FD (ev.fd) is ready.
+	perfready bool
+
+	// err is the *os.SyscallError from ppoll(2).
+	err error
+}
+
+// ReadRecord reads and decodes a record from the ring buffer associated
+// with ev.
+//
+// ReadRecord may be called concurrently with ReadCount or ReadGroupCount,
+// but not concurrently with itself, ReadRawRecord, Close, or any other
+// Event method.
+func (ev *Event) ReadRecord(ctx context.Context) (Record, error) {
+	if err := ev.ok(); err != nil {
+		return nil, err
+	}
+	var raw RawRecord
+	if err := ev.ReadRawRecord(ctx, &raw); err != nil {
+		return nil, err
+	}
+	rec, err := newRecord(raw.Header.Type)
+	if err != nil {
+		return nil, err
+	}
+	rec.DecodeFrom(&raw, ev)
+	return rec, nil
+}
+
+// ReadRawRecord reads and decodes a raw record from the ring buffer
+// associated with ev into rec. Callers must not retain rec.Data.
 //
 // ReadRawRecord may be called concurrently with ReadCount or ReadGroupCount,
-// but not concurrently with Close or any other method.
-func (ev *Event) ReadRawRecord(ctx context.Context, rec *RawRecord) error {
+// but not concurrently with itself, ReadRecord, Close or any other Event
+// method.
+func (ev *Event) ReadRawRecord(ctx context.Context, raw *RawRecord) error {
 	if err := ev.ok(); err != nil {
 		return err
 	}
 	// Fast path: try reading from the ring buffer first. If there is
 	// a record there, we are done.
-	if ev.readRawRecord(rec) {
+	if ev.readRawRecordNonblock(raw) {
 		return nil
 	}
 	// If the context has a deadline, and that deadline is in the future,
@@ -382,9 +416,10 @@ func (ev *Event) ReadRawRecord(ctx context.Context, rec *RawRecord) error {
 			return ctx.Err()
 		}
 	}
-	// Start a round of polling.
+	// Start a round of polling, then await results. Only one request
+	// can be in flight at a time, and the whole request-response cycle
+	// is owned by the current invocation of ReadRawRecord.
 	ev.pollreq <- pollreq{timeout: timeout}
-	// Await results.
 	select {
 	case <-ctx.Done():
 		active := false
@@ -428,53 +463,42 @@ func (ev *Event) ReadRawRecord(ctx context.Context, rec *RawRecord) error {
 			<-ctx.Done()
 			return ctx.Err()
 		}
-		ev.readRawRecord(rec) // will succeed now
+		ev.readRawRecordNonblock(raw) // will succeed now
 		return nil
 	}
 }
 
-// RawRecord is a raw overflow record.
-//
-// TODO(acln): document that Data includes the Header bytes
-type RawRecord struct {
-	Header RecordHeader
-	Data   []byte
-}
-
-func (raw *RawRecord) fields() fields {
-	return fields(raw.Data[8:]) // first 8 bytes are header data
-}
-
-// readRawRecord reads (non-blocking) a raw record into rec.
-//
-// The boolean return value signals whether a record was actually found.
-func (ev *Event) readRawRecord(rec *RawRecord) bool {
+// readRawRecordNonblock reads a raw record into rec, if one is available.
+// Callers must not retain rec.Data. The boolean return value signals whether
+// a record was actually found / written to rec.
+func (ev *Event) readRawRecordNonblock(raw *RawRecord) bool {
 	head := atomic.LoadUint64(&ev.meta.Data_head)
 	tail := atomic.LoadUint64(&ev.meta.Data_tail)
 	if head == tail {
 		return false
 	}
-
+	// Head and tail values only ever grow, so we must take their value
+	// modulo the size of the data segment of the ring.
 	start := tail % uint64(len(ev.ringdata))
-	rec.Header = *(*RecordHeader)(unsafe.Pointer(&ev.ringdata[start]))
-	end := (tail + uint64(rec.Header.Size)) % uint64(len(ev.ringdata))
-
+	raw.Header = *(*RecordHeader)(unsafe.Pointer(&ev.ringdata[start]))
+	end := (tail + uint64(raw.Header.Size)) % uint64(len(ev.ringdata))
+	// If the record wraps around the ring, we must allocate storage,
+	// so that we can return a contiguous area of memory to the caller.
 	var data []byte
 	if end < start {
-		// Record straddles the ring buffer. Allocate, in order to
-		// return a contiguous area of memory to the caller.
-		data = make([]byte, rec.Header.Size)
+		data = make([]byte, raw.Header.Size)
 		n := copy(data, ev.ringdata[start:])
-		copy(data[n:], ev.ringdata[:int(rec.Header.Size)-n])
+		copy(data[n:], ev.ringdata[:int(raw.Header.Size)-n])
 	} else {
 		data = ev.ringdata[start:end]
 	}
-	rec.Data = data
-
-	atomic.AddUint64(&ev.meta.Data_tail, uint64(rec.Header.Size))
+	raw.Data = data[unsafe.Sizeof(raw.Header):]
+	// Notify the kernel of the last record we've seen.
+	atomic.AddUint64(&ev.meta.Data_tail, uint64(raw.Header.Size))
 	return true
 }
 
+// poll services requests from ev.pollreq and sends responses on ev.pollresp.
 func (ev *Event) poll() {
 	defer close(ev.pollresp)
 
@@ -483,9 +507,8 @@ func (ev *Event) poll() {
 	}
 }
 
-// doPoll executes one round of polling on ev.fd and ev.evfd.
-//
-// A req.timeout of zero is interpreted as "no timeout".
+// doPoll executes one round of polling on ev.fd and ev.evfd. A req.timeout
+// value of zero is interpreted as "no timeout".
 func (ev *Event) doPoll(req pollreq) pollresp {
 	var systimeout *unix.Timespec
 	if req.timeout > 0 {
@@ -502,7 +525,7 @@ func (ev *Event) doPoll(req pollreq) pollresp {
 	}
 again:
 	_, err := unix.Ppoll(pollfds, systimeout, nil)
-	// TODO(acln): do we need to do this at all? most of the stdlib doesn't.
+	// TODO(acln): do we need to do this business at all? See #20400.
 	if err == unix.EINTR {
 		goto again
 	}
@@ -521,21 +544,19 @@ again:
 // Close closes the event. Close must not be called concurrently with any
 // other methods on the Event.
 func (ev *Event) Close() error {
-	atomic.StoreInt32(&ev.state, eventStateClosed)
+	ev.state = eventStateClosed
 	close(ev.pollreq)
 	<-ev.pollresp
-	unix.Munmap(ev.ring)
-	unix.Close(ev.evfd)
-	return unix.Close(ev.fd)
-}
-
-type pollreq struct {
-	timeout time.Duration // timeout for ppoll(2): zero means no timeout
-}
-
-type pollresp struct {
-	perfready bool  // is the perf FD ready?
-	err       error // an *os.SyscallError, never contains EINTR
+	muerr := unix.Munmap(ev.ring)
+	evfderr := unix.Close(ev.evfd)
+	cerr := unix.Close(ev.fd)
+	if muerr != nil {
+		return muerr
+	}
+	if evfderr != nil {
+		return evfderr
+	}
+	return cerr
 }
 
 // An EventGroup configures a group of related events.
@@ -611,16 +632,13 @@ type EventAttr struct {
 	// the ring buffer associated with the event.
 	SampleFormat SampleFormat
 
-	// ReadFormat specifies the format of counts read from the event file
-	// descriptor. See struct read_format in perf_event.h for details.
-	//
-	// TODO(acln): do better than send people to a C header.
-	ReadFormat ReadFormat
+	// CountFormat specifies the format of counts read from the
+	// Event using ReadCount or ReadGroupCount. See the CountFormat
+	// documentation for more details.
+	CountFormat CountFormat
 
-	// Options contains fine grained event configuration.
-	//
-	// TODO(acln): this is not a great description.
-	Options EventOptions
+	// Options contains more fine grained event configuration.
+	Options Options
 
 	// Wakeup configures event wakeup. If Options.Watermark is set,
 	// Wakeup is interpreted as the number of bytes before wakeup.
@@ -679,7 +697,7 @@ func (attr EventAttr) sysAttr() *unix.PerfEventAttr {
 		Config:             attr.Config,
 		Sample:             attr.Sample,
 		Sample_type:        attr.SampleFormat.marshal(),
-		Read_format:        attr.ReadFormat.marshal(),
+		Read_format:        attr.CountFormat.marshal(),
 		Bits:               attr.Options.marshal(),
 		Wakeup:             attr.Wakeup,
 		Bp_type:            attr.BreakpointType,
@@ -727,7 +745,17 @@ const (
 // ProbePMU probes /sys/bus/event_source/devices/<name>/type for the EventType
 // value associated with the specified PMU.
 func ProbePMU(name string) (EventType, error) {
-	panic("not implemented")
+	p := filepath.Join("/sys/bus/event_source/devices", name, "type")
+	content, err := ioutil.ReadFile(p)
+	if err != nil {
+		return 0, err
+	}
+	nr := strings.TrimSpace(string(content)) // remove trailing newline
+	et, err := strconv.ParseUint(nr, 10, 32)
+	if err != nil {
+		return 0, err
+	}
+	return EventType(et), nil
 }
 
 // HardwareCounter is a hardware performance counter.
@@ -925,14 +953,14 @@ func NewTracepoint(category string, event string) (EventAttr, error) {
 //
 // typ is the type of the breakpoint.
 //
-// addr is the address of the breakpoint. For execution breakpoints, this is
-// the memory address of the instruction of interest; for read and write breakpoints,
-// it is the memory address of the memory location of interest.
+// addr is the address of the breakpoint. For execution breakpoints, this
+// is the memory address of the instruction of interest; for read and write
+// breakpoints, it is the memory address of the memory location of interest.
 //
 // length is the length of the breakpoint being measured.
 //
-// Breakpoint sets the Type, BreakpointType, Config1 and Config2 fields on the
-// returned Event.
+// Breakpoint sets the Type, BreakpointType, Config1 and Config2 fields on
+// the returned EventAttr.
 func NewBreakpoint(typ BreakpointType, addr uint64, length BreakpointLength) EventAttr {
 	return EventAttr{
 		Type:           BreakpointEvent,
@@ -1006,15 +1034,28 @@ func (st SampleFormat) marshal() uint64 {
 	return marshalBitwiseUint64(fields)
 }
 
-// ReadFormat configures the format of Count or GroupCount measurements.
-type ReadFormat struct {
+// CountFormat configures the format of Count or GroupCount measurements.
+//
+// TotalTimeEnabled and TotalTimeRunning configure the Event to include time
+// enabled and time running measurements to the counts. Usually, these two
+// values are equal. They may differ when events are multiplexed.
+// TODO(acln): elaborate, see also time_shift and time_mul on the mmap meta page
+//
+// If ID is set, a unique ID is assigned to the associated event.
+//
+// TODO(acln): mention that the returned ID is the same as what we get
+// from the ID method / ioctl (after verifying using tests).
+//
+// If Group is set, callers must use ReadGroupCount on the associated Event.
+// Otherwise, they must use ReadCount.
+type CountFormat struct {
 	TotalTimeEnabled bool
 	TotalTimeRunning bool
 	ID               bool
 	Group            bool
 }
 
-func (f ReadFormat) readSize() int {
+func (f CountFormat) readSize() int {
 	size := 8 // value is always set
 	if f.TotalTimeEnabled {
 		size += 8
@@ -1028,7 +1069,7 @@ func (f ReadFormat) readSize() int {
 	return size
 }
 
-func (f ReadFormat) groupReadHeaderSize() int {
+func (f CountFormat) groupReadHeaderSize() int {
 	size := 8 // number of events is always set
 	if f.TotalTimeEnabled {
 		size += 8
@@ -1039,7 +1080,7 @@ func (f ReadFormat) groupReadHeaderSize() int {
 	return size
 }
 
-func (f ReadFormat) groupReadCountSize() int {
+func (f CountFormat) groupReadCountSize() int {
 	size := 8 // value is always set
 	if f.ID {
 		size += 8
@@ -1047,8 +1088,8 @@ func (f ReadFormat) groupReadCountSize() int {
 	return size
 }
 
-// marshal marshals the ReadFormat into a uint64.
-func (f ReadFormat) marshal() uint64 {
+// marshal marshals the CountFormat into a uint64.
+func (f CountFormat) marshal() uint64 {
 	// Always keep this in sync with the type definition above.
 	fields := []bool{
 		f.TotalTimeEnabled,
@@ -1059,8 +1100,8 @@ func (f ReadFormat) marshal() uint64 {
 	return marshalBitwiseUint64(fields)
 }
 
-// EventOptions contains low level event options.
-type EventOptions struct {
+// Options contains low level event options.
+type Options struct {
 	Disabled               bool // off by default
 	Inherit                bool // children inherit it
 	Pinned                 bool // must always be on PMU
@@ -1091,7 +1132,7 @@ type EventOptions struct {
 	Namespaces             bool // include namespaces data
 }
 
-func (opt EventOptions) marshal() uint64 {
+func (opt Options) marshal() uint64 {
 	fields := []bool{
 		opt.Disabled,
 		opt.Inherit,
@@ -1160,27 +1201,10 @@ const (
 	BranchSampleSave             BranchSampleFormat = unix.PERF_SAMPLE_BRANCH_TYPE_SAVE
 )
 
-// RecordType is the type of an overflow record.
-//
-// TODO(acln): add these constants
-type RecordType uint32
-
-// RecordHeader is the header present in every overflow record.
-type RecordHeader struct {
-	Type RecordType
-	Misc uint16
-	Size uint16
-}
-
-// Header returns rh, such that types which embed a RecordHeader
-// automatically implement the Record interface.
-func (rh RecordHeader) Header() RecordHeader { return rh }
-
 // RecordID contains identifiers for when and where a record was collected.
 //
-// See struct sample_id in the perf_event_open manual page.
-//
-// TODO(acln): document the relationship between this and SampleFormat.
+// TODO(acln): elaborate on when fields are set based on SampleFormat and
+// Options.SampleIDAll.
 type RecordID struct {
 	Pid        uint32
 	Tid        uint32
@@ -1265,6 +1289,88 @@ func (f *fields) id(id *RecordID, ev *Event) {
 // advance advances through the fields by n bytes.
 func (f *fields) advance(n int) {
 	*f = (*f)[n:]
+}
+
+// RecordType is the type of an overflow record.
+type RecordType uint32
+
+// Known record types.
+const (
+	RecordTypeMmap          RecordType = unix.PERF_RECORD_MMAP
+	RecordTypeLost          RecordType = unix.PERF_RECORD_LOST
+	RecordTypeComm          RecordType = unix.PERF_RECORD_COMM
+	RecordTypeExit          RecordType = unix.PERF_RECORD_EXIT
+	RecordTypeThrottle      RecordType = unix.PERF_RECORD_THROTTLE
+	RecordTypeUnthrottle    RecordType = unix.PERF_RECORD_UNTHROTTLE
+	RecordTypeFork          RecordType = unix.PERF_RECORD_FORK
+	RecordTypeRead          RecordType = unix.PERF_RECORD_READ
+	RecordTypeSample        RecordType = unix.PERF_RECORD_SAMPLE
+	RecordTypeMmap2         RecordType = unix.PERF_RECORD_MMAP2
+	RecordTypeAux           RecordType = unix.PERF_RECORD_AUX
+	RecordTypeItraceStart   RecordType = unix.PERF_RECORD_ITRACE_START
+	RecordTypeLostSamples   RecordType = unix.PERF_RECORD_LOST_SAMPLES
+	RecordTypeSwitch        RecordType = unix.PERF_RECORD_SWITCH
+	RecordTypeSwitchCPUWide RecordType = unix.PERF_RECORD_SWITCH_CPU_WIDE
+	RecordTypeNamespaces    RecordType = unix.PERF_RECORD_NAMESPACES
+)
+
+func (rt RecordType) known() bool {
+	return rt >= RecordTypeMmap && rt <= RecordTypeNamespaces
+}
+
+// RecordHeader is the header present in every overflow record.
+type RecordHeader struct {
+	Type RecordType
+	Misc uint16
+	Size uint16
+}
+
+// Header returns rh itself, so that types which embed a RecordHeader
+// automatically implement a part of the Record interface.
+func (rh RecordHeader) Header() RecordHeader { return rh }
+
+// RawRecord is a raw overflow record, read from the memory mapped ring
+// buffer associated with an Event.
+//
+// Header is the 8 byte record header. Data contains the rest of the record.
+type RawRecord struct {
+	Header RecordHeader
+	Data   []byte
+}
+
+func (raw RawRecord) fields() fields { return fields(raw.Data) }
+
+var newRecordFuncs = [...]func() Record{
+	RecordTypeMmap:          func() Record { return &MmapRecord{} },
+	RecordTypeLost:          func() Record { return &LostRecord{} },
+	RecordTypeComm:          func() Record { return &CommRecord{} },
+	RecordTypeExit:          func() Record { return &ExitRecord{} },
+	RecordTypeThrottle:      func() Record { return &ThrottleRecord{} },
+	RecordTypeUnthrottle:    func() Record { return &UnthrottleRecord{} },
+	RecordTypeFork:          func() Record { return &ForkRecord{} },
+	RecordTypeRead:          func() Record { return &ReadRecord{} },
+	RecordTypeSample:        func() Record { return &SampleRecord{} },
+	RecordTypeMmap2:         func() Record { return &Mmap2Record{} },
+	RecordTypeAux:           func() Record { return &AuxRecord{} },
+	RecordTypeItraceStart:   func() Record { return &ItraceStartRecord{} },
+	RecordTypeLostSamples:   func() Record { return &LostSamplesRecord{} },
+	RecordTypeSwitch:        func() Record { return &SwitchRecord{} },
+	RecordTypeSwitchCPUWide: func() Record { return &SwitchCPUWideRecord{} },
+	RecordTypeNamespaces:    func() Record { return &NamespacesRecord{} },
+}
+
+// newRecord returns an empty Record of the given type.
+func newRecord(rt RecordType) (Record, error) {
+	if !rt.known() {
+		return nil, fmt.Errorf("unknown record type %d", rt)
+	}
+	return newRecordFuncs[rt](), nil
+}
+
+// Record is the interface implemented by all record types.
+type Record interface {
+	Header() RecordHeader
+	DecodeFrom(*RawRecord, *Event)
 }
 
 type MmapRecord struct {
@@ -1396,7 +1502,7 @@ type ReadRecord struct {
 	RecordHeader
 	Pid    uint32
 	Tid    uint32
-	Values ReadFormat
+	Values CountFormat
 	RecordID
 }
 
@@ -1422,7 +1528,7 @@ type SampleRecord struct {
 	CPU        uint32
 	Res        uint32
 	Period     uint64
-	Values     ReadFormat
+	Values     CountFormat
 	Callchain  []uint64
 
 	// Non-ABI fields:
@@ -1526,6 +1632,19 @@ func (ir *ItraceStartRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	f.id(&ir.RecordID, ev)
 }
 
+type LostSamplesRecord struct {
+	RecordHeader
+	Lost uint64
+	RecordID
+}
+
+func (lr *LostSamplesRecord) DecodeFrom(raw *RawRecord, ev *Event) {
+	lr.RecordHeader = raw.Header
+	f := raw.fields()
+	f.uint64(&lr.Lost)
+	f.id(&lr.RecordID, ev)
+}
+
 type SwitchRecord struct {
 	RecordHeader
 	RecordID
@@ -1537,14 +1656,14 @@ func (sr *SwitchRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	f.id(&sr.RecordID, ev)
 }
 
-type CPUWideSwitchRecord struct {
+type SwitchCPUWideRecord struct {
 	RecordHeader
 	Pid uint32
 	Tid uint32
 	RecordID
 }
 
-func (sr *CPUWideSwitchRecord) DecodeFrom(raw *RawRecord, ev *Event) {
+func (sr *SwitchCPUWideRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	sr.RecordHeader = raw.Header
 	f := raw.fields()
 	f.uint32(&sr.Pid, &sr.Tid)
