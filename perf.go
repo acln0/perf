@@ -504,6 +504,7 @@ func (ev *Event) doPoll(req pollreq) pollresp {
 	}
 again:
 	_, err := unix.Ppoll(pollfds, systimeout, nil)
+	// TODO(acln): do we need to do this at all? most of the stdlib doesn't.
 	if err == unix.EINTR {
 		goto again
 	}
@@ -512,7 +513,7 @@ again:
 	// fired, or we got POLLIN on ev.evfd.
 	//
 	// Report if the perf fd is ready, and any errors except EINTR.
-	// The machinery is documented in more detail in ReadRecord.
+	// The machinery is documented in more detail in ReadRawRecord.
 	return pollresp{
 		perfready: pollfds[0].Revents&unix.POLLIN != 0,
 		err:       os.NewSyscallError("ppoll", err),
