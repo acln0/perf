@@ -74,8 +74,6 @@ func ioctlQueryBPF(fd int, max uint32) ([]uint32, error) {
 	return fds, nil
 }
 
-// TODO(acln): PERF_EVENT_IOC_QUERY_BPF
-
 func ioctlModifyAttributes(fd int, attr *unix.PerfEventAttr) error {
 	err := ioctlPointer(fd, unix.PERF_EVENT_IOC_MODIFY_ATTRIBUTES, unsafe.Pointer(attr))
 	return wrapIoctlError("PERF_EVENT_IOC_MODIFY_ATTRIBUTES", err)
