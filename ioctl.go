@@ -60,6 +60,20 @@ func ioctlPauseOutput(fd int, val uint32) error {
 	return wrapIoctlError("PEF_EVENT_IOC_PAUSE_OUTPUT", err)
 }
 
+func ioctlQueryBPF(fd int, max uint32) ([]uint32, error) {
+	buf := make([]uint32, 2+max)
+	buf[0] = max
+	bufp := unsafe.Pointer(&buf[0])
+	err := ioctlPointer(fd, unix.PERF_EVENT_IOC_QUERY_BPF, bufp)
+	if err != nil {
+		return nil, err
+	}
+	count := buf[1]
+	fds := make([]uint32, count)
+	copy(fds, buf[2:2+count])
+	return fds, nil
+}
+
 // TODO(acln): PERF_EVENT_IOC_QUERY_BPF
 
 func ioctlModifyAttributes(fd int, attr *unix.PerfEventAttr) error {

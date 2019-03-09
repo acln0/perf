@@ -284,7 +284,15 @@ func (ev *Event) ResumeOutput() error {
 	return ioctlPauseOutput(ev.fd, 0)
 }
 
-// TODO(acln): PERF_EVENT_IOC_QUERY_BPF
+// QueryBPF queries the event for BPF program file descriptors attached to
+// the same tracepoint as ev. max is the maximum number of file descriptors
+// to return.
+func (ev *Event) QueryBPF(max uint32) ([]uint32, error) {
+	if err := ev.ok(); err != nil {
+		return nil, err
+	}
+	return ioctlQueryBPF(ev.fd, max)
+}
 
 // ModifyAttributes modifies the attributes of an event.
 func (ev *Event) ModifyAttributes(attr EventAttr) error {
