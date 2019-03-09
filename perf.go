@@ -7,7 +7,6 @@ package perf
 
 import (
 	"context"
-	"encoding/binary"
 	"errors"
 	"io"
 	"io/ioutil"
@@ -225,25 +224,6 @@ func (ev *Event) Reset() error {
 
 // TODO(acln): add remaining ioctls as methods on *Event.
 
-// TODO(acln): scrap all of the following and just use unsafe to read?
-
-var isLittleEndian bool
-
-func init() {
-	var x uint16 = 0x1234
-	b := (*[2]byte)(unsafe.Pointer(&x))
-	if b[0] == 0x34 {
-		isLittleEndian = true
-	}
-}
-
-func nativeEndianUint64(b []byte) uint64 {
-	if isLittleEndian {
-		return binary.LittleEndian.Uint64(b)
-	}
-	return binary.BigEndian.Uint64(b)
-}
-
 var errGroupEvent = errors.New("calling ReadCount on group Event")
 
 // ReadCount reads a single count. If the Event was configured with
@@ -262,21 +242,11 @@ func (ev *Event) ReadCount() (Count, error) {
 	if err != nil {
 		return c, os.NewSyscallError("read", err)
 	}
-	nextField := func() uint64 {
-		val := nativeEndianUint64(buf)
-		buf = buf[8:]
-		return val
-	}
-	c.Value = nextField()
-	if ev.attr.ReadFormat.TotalTimeEnabled {
-		c.TimeEnabled = time.Duration(nextField())
-	}
-	if ev.attr.ReadFormat.TotalTimeRunning {
-		c.TimeRunning = time.Duration(nextField())
-	}
-	if ev.attr.ReadFormat.ID {
-		c.ID = nextField()
-	}
+	f := fields(buf)
+	f.uint64(&c.Value)
+	f.durationIf(ev.attr.ReadFormat.TotalTimeEnabled, &c.TimeEnabled)
+	f.durationIf(ev.attr.ReadFormat.TotalTimeRunning, &c.TimeRunning)
+	f.uint64If(ev.attr.ReadFormat.ID, &c.ID)
 	return c, err
 }
 
@@ -301,28 +271,16 @@ func (ev *Event) ReadGroupCount() (GroupCount, error) {
 	if err != nil {
 		return gc, os.NewSyscallError("read", err)
 	}
-	nextField := func() uint64 {
-		val := nativeEndianUint64(buf)
-		buf = buf[8:]
-		return val
+	f := fields(buf)
+	var nr uint64
+	f.uint64(&nr)
+	f.durationIf(ev.attr.ReadFormat.TotalTimeEnabled, &gc.TimeEnabled)
+	f.durationIf(ev.attr.ReadFormat.TotalTimeRunning, &gc.TimeRunning)
+	gc.Counts = make([]struct{ Value, ID uint64 }, nr)
+	for i := 0; i < int(nr); i++ {
+		f.uint64(&gc.Counts[i].Value)
+		f.uint64If(ev.attr.ReadFormat.ID, &gc.Counts[i].ID)
 	}
-	nr := int(nextField())
-	if ev.attr.ReadFormat.TotalTimeEnabled {
-		gc.TimeEnabled = time.Duration(nextField())
-	}
-	if ev.attr.ReadFormat.TotalTimeRunning {
-		gc.TimeRunning = time.Duration(nextField())
-	}
-	counts := make([]struct{ Value, ID uint64 }, 0, nr)
-	for i := 0; i < nr; i++ {
-		var c struct{ Value, ID uint64 }
-		c.Value = nextField()
-		if ev.attr.ReadFormat.ID {
-			c.ID = nextField()
-		}
-		counts = append(counts, c)
-	}
-	gc.Counts = counts
 	return gc, nil
 }
 
@@ -347,7 +305,7 @@ func (ev *Event) ReadRawRecord(ctx context.Context, rec *RawRecord) error {
 	var timeout time.Duration
 	deadline, ok := ctx.Deadline()
 	if ok {
-		timeout = deadline.Sub(time.Now())
+		timeout = time.Until(deadline)
 		if timeout <= 0 {
 			<-ctx.Done()
 			return ctx.Err()
@@ -364,7 +322,9 @@ func (ev *Event) ReadRawRecord(ctx context.Context, rec *RawRecord) error {
 			// Initiate active wakeup. Send a signal on ev.evfd
 			// and wait for doPoll to wake up. doPoll might miss
 			// this signal, but that's okay: see below.
-			unix.Write(ev.evfd, nativeEndian1Bytes)
+			val := uint64(1)
+			buf := (*[8]byte)(unsafe.Pointer(&val))[:]
+			unix.Write(ev.evfd, buf)
 			active = true
 		}
 		<-ev.pollresp
@@ -410,8 +370,8 @@ type RawRecord struct {
 	Data   []byte
 }
 
-func (raw *RawRecord) fields() recordFields {
-	return recordFields(raw.Data[8:]) // first 8 bytes are header data
+func (raw *RawRecord) fields() fields {
+	return fields(raw.Data[8:]) // first 8 bytes are header data
 }
 
 // readRawRecord reads (non-blocking) a raw record into rec.
@@ -486,10 +446,7 @@ again:
 	}
 }
 
-var (
-	evfd1              = uint64(1)
-	nativeEndian1Bytes = (*[8]byte)(unsafe.Pointer(&evfd1))[:]
-)
+var ()
 
 // Close closes the event. Close must not be called concurrently with any
 // other methods on the Event.
@@ -514,9 +471,7 @@ type pollresp struct {
 // An EventGroup configures a group of related events.
 // The zero value of EventGroup is an empty group.
 type EventGroup struct {
-	events []*EventAttr
-	labels []string
-	// etc.
+	// ...
 }
 
 func (g *EventGroup) Open(pid int, cpu int, flags Flag) (*Event, error) {
@@ -1172,45 +1127,79 @@ type RecordID struct {
 	Identifier uint64
 }
 
-type recordFields []byte
+// fields is a collection of 32-bit or 64-bit fields.
+type fields []byte
 
-func (rf *recordFields) uint64(v *uint64) {
-	*v = *(*uint64)(unsafe.Pointer(&(*rf)[0]))
-	*rf = (*rf)[8:]
+// uint64 decodes the next 64 bit field into v.
+func (f *fields) uint64(v *uint64) {
+	*v = *(*uint64)(unsafe.Pointer(&(*f)[0]))
+	f.advance(8)
 }
 
-func (rf *recordFields) uint64If(cond bool, v *uint64) {
+// uint64If decodes the next 64 bit field into v, if cond is true.
+func (f *fields) uint64If(cond bool, v *uint64) {
 	if cond {
-		rf.uint64(v)
+		f.uint64(v)
 	}
 }
 
-func (rf *recordFields) uint32(a, b *uint32) {
-	*a = *(*uint32)(unsafe.Pointer(&(*rf)[0]))
-	*b = *(*uint32)(unsafe.Pointer(&(*rf)[4]))
-	*rf = (*rf)[8:]
+// uint32 decodes a pair of uint32s into a and b.
+func (f *fields) uint32(a, b *uint32) {
+	*a = *(*uint32)(unsafe.Pointer(&(*f)[0]))
+	*b = *(*uint32)(unsafe.Pointer(&(*f)[4]))
+	f.advance(8)
 }
 
-func (rf *recordFields) uint32If(cond bool, a, b *uint32) {
+// uint32 decodes a pair of uint32s into a and b, if cond is true.
+func (f *fields) uint32If(cond bool, a, b *uint32) {
 	if cond {
-		rf.uint32(a, b)
+		f.uint32(a, b)
 	}
 }
 
-func (rf *recordFields) string(s *string) {
-	*s = "TODO"
+// duration decodes a duration into d.
+func (f *fields) duration(d *time.Duration) {
+	*d = *(*time.Duration)(unsafe.Pointer(&(*f)[0]))
+	f.advance(8)
 }
 
-func (rf *recordFields) id(id *RecordID, ev *Event) {
+// durationIf decodes a duration into d, if cond is true.
+func (f *fields) durationIf(cond bool, d *time.Duration) {
+	if cond {
+		f.duration(d)
+	}
+}
+
+// string decodes a null-terminated string into s. The null terminator
+// is not included in the string written to s.
+func (f *fields) string(s *string) {
+	for i := 0; i < len(*f); i++ {
+		if (*f)[i] == 0 {
+			*s = string((*f)[:i])
+			if i+1 <= len(*f) {
+				f.advance(i + 1)
+			}
+			return
+		}
+	}
+}
+
+// id decodes a RecordID based on the SampleFormat ev was configured with.
+func (f *fields) id(id *RecordID, ev *Event) {
 	if !ev.attr.Options.SampleIDAll {
 		return
 	}
-	rf.uint32If(ev.attr.SampleFormat.Tid, &id.Pid, &id.Tid)
-	rf.uint64If(ev.attr.SampleFormat.Time, &id.Time)
-	rf.uint64If(ev.attr.SampleFormat.ID, &id.ID)
-	rf.uint64If(ev.attr.SampleFormat.StreamID, &id.StreamID)
-	rf.uint32If(ev.attr.SampleFormat.CPU, &id.CPU, &id.Res)
-	rf.uint64If(ev.attr.SampleFormat.Identifier, &id.Identifier)
+	f.uint32If(ev.attr.SampleFormat.Tid, &id.Pid, &id.Tid)
+	f.uint64If(ev.attr.SampleFormat.Time, &id.Time)
+	f.uint64If(ev.attr.SampleFormat.ID, &id.ID)
+	f.uint64If(ev.attr.SampleFormat.StreamID, &id.StreamID)
+	f.uint32If(ev.attr.SampleFormat.CPU, &id.CPU, &id.Res)
+	f.uint64If(ev.attr.SampleFormat.Identifier, &id.Identifier)
+}
+
+// advance advances through the fields by n bytes.
+func (f *fields) advance(n int) {
+	*f = (*f)[n:]
 }
 
 type MmapRecord struct {
@@ -1226,13 +1215,13 @@ type MmapRecord struct {
 
 func (mr *MmapRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	mr.RecordHeader = raw.Header
-	rf := raw.fields()
-	rf.uint32(&mr.Pid, &mr.Tid)
-	rf.uint64(&mr.Addr)
-	rf.uint64(&mr.Len)
-	rf.uint64(&mr.Pgoff)
-	rf.string(&mr.Filename)
-	rf.id(&mr.RecordID, ev)
+	f := raw.fields()
+	f.uint32(&mr.Pid, &mr.Tid)
+	f.uint64(&mr.Addr)
+	f.uint64(&mr.Len)
+	f.uint64(&mr.Pgoff)
+	f.string(&mr.Filename)
+	f.id(&mr.RecordID, ev)
 }
 
 type LostRecord struct {
@@ -1244,10 +1233,10 @@ type LostRecord struct {
 
 func (lr *LostRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	lr.RecordHeader = raw.Header
-	rf := raw.fields()
-	rf.uint64(&lr.ID)
-	rf.uint64(&lr.Lost)
-	rf.id(&lr.RecordID, ev)
+	f := raw.fields()
+	f.uint64(&lr.ID)
+	f.uint64(&lr.Lost)
+	f.id(&lr.RecordID, ev)
 }
 
 type CommRecord struct {
@@ -1260,10 +1249,10 @@ type CommRecord struct {
 
 func (cr *CommRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	cr.RecordHeader = raw.Header
-	rf := raw.fields()
-	rf.uint32(&cr.Pid, &cr.Tid)
-	rf.string(&cr.Comm)
-	rf.id(&cr.RecordID, ev)
+	f := raw.fields()
+	f.uint32(&cr.Pid, &cr.Tid)
+	f.string(&cr.Comm)
+	f.id(&cr.RecordID, ev)
 }
 
 type ExitRecord struct {
@@ -1278,11 +1267,11 @@ type ExitRecord struct {
 
 func (er *ExitRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	er.RecordHeader = raw.Header
-	rf := raw.fields()
-	rf.uint32(&er.Pid, &er.Ppid)
-	rf.uint32(&er.Tid, &er.Ptid)
-	rf.uint64(&er.Time)
-	rf.id(&er.RecordID, ev)
+	f := raw.fields()
+	f.uint32(&er.Pid, &er.Ppid)
+	f.uint32(&er.Tid, &er.Ptid)
+	f.uint64(&er.Time)
+	f.id(&er.RecordID, ev)
 }
 
 type ThrottleRecord struct {
@@ -1295,11 +1284,11 @@ type ThrottleRecord struct {
 
 func (tr *ThrottleRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	tr.RecordHeader = raw.Header
-	rf := raw.fields()
-	rf.uint64(&tr.Time)
-	rf.uint64(&tr.ID)
-	rf.uint64(&tr.StreamID)
-	rf.id(&tr.RecordID, ev)
+	f := raw.fields()
+	f.uint64(&tr.Time)
+	f.uint64(&tr.ID)
+	f.uint64(&tr.StreamID)
+	f.id(&tr.RecordID, ev)
 }
 
 type UnthrottleRecord struct {
@@ -1312,11 +1301,11 @@ type UnthrottleRecord struct {
 
 func (ur *UnthrottleRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	ur.RecordHeader = raw.Header
-	rf := raw.fields()
-	rf.uint64(&ur.Time)
-	rf.uint64(&ur.ID)
-	rf.uint64(&ur.StreamID)
-	rf.id(&ur.RecordID, ev)
+	f := raw.fields()
+	f.uint64(&ur.Time)
+	f.uint64(&ur.ID)
+	f.uint64(&ur.StreamID)
+	f.id(&ur.RecordID, ev)
 }
 
 type ForkRecord struct {
@@ -1331,11 +1320,11 @@ type ForkRecord struct {
 
 func (fr *ForkRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	fr.RecordHeader = raw.Header
-	rf := raw.fields()
-	rf.uint32(&fr.Pid, &fr.Ppid)
-	rf.uint32(&fr.Tid, &fr.Ptid)
-	rf.uint64(&fr.Time)
-	rf.id(&fr.RecordID, ev)
+	f := raw.fields()
+	f.uint32(&fr.Pid, &fr.Ppid)
+	f.uint32(&fr.Tid, &fr.Ptid)
+	f.uint64(&fr.Time)
+	f.id(&fr.RecordID, ev)
 }
 
 type ReadRecord struct {
@@ -1348,8 +1337,8 @@ type ReadRecord struct {
 
 func (rr *ReadRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	rr.RecordHeader = raw.Header
-	rf := raw.fields()
-	rf.uint32(&rr.Pid, &rr.Tid)
+	f := raw.fields()
+	f.uint32(&rr.Pid, &rr.Tid)
 	// TODO(acln): values
 }
 
@@ -1394,16 +1383,16 @@ type SampleRecord struct {
 
 func (sr *SampleRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	sr.RecordHeader = raw.Header
-	rf := raw.fields()
-	rf.uint64If(ev.attr.SampleFormat.Identifier, &sr.Identifier)
-	rf.uint64If(ev.attr.SampleFormat.IP, &sr.IP)
-	rf.uint32If(ev.attr.SampleFormat.Tid, &sr.Pid, &sr.Tid)
-	rf.uint64If(ev.attr.SampleFormat.Time, &sr.Time)
-	rf.uint64If(ev.attr.SampleFormat.Addr, &sr.Addr)
-	rf.uint64If(ev.attr.SampleFormat.ID, &sr.ID)
-	rf.uint64If(ev.attr.SampleFormat.StreamID, &sr.StreamID)
-	rf.uint32If(ev.attr.SampleFormat.CPU, &sr.CPU, &sr.Res)
-	rf.uint64If(ev.attr.SampleFormat.Period, &sr.Period)
+	f := raw.fields()
+	f.uint64If(ev.attr.SampleFormat.Identifier, &sr.Identifier)
+	f.uint64If(ev.attr.SampleFormat.IP, &sr.IP)
+	f.uint32If(ev.attr.SampleFormat.Tid, &sr.Pid, &sr.Tid)
+	f.uint64If(ev.attr.SampleFormat.Time, &sr.Time)
+	f.uint64If(ev.attr.SampleFormat.Addr, &sr.Addr)
+	f.uint64If(ev.attr.SampleFormat.ID, &sr.ID)
+	f.uint64If(ev.attr.SampleFormat.StreamID, &sr.StreamID)
+	f.uint32If(ev.attr.SampleFormat.CPU, &sr.CPU, &sr.Res)
+	f.uint64If(ev.attr.SampleFormat.Period, &sr.Period)
 	// TODO(acln): values
 	// TODO(acln): callchain
 	// TODO(acln): non-ABI bits
@@ -1428,17 +1417,17 @@ type Mmap2Record struct {
 
 func (mr *Mmap2Record) DecodeFrom(raw *RawRecord, ev *Event) {
 	mr.RecordHeader = raw.Header
-	rf := raw.fields()
-	rf.uint32(&mr.Pid, &mr.Tid)
-	rf.uint64(&mr.Addr)
-	rf.uint64(&mr.Len)
-	rf.uint64(&mr.Pgoff)
-	rf.uint32(&mr.Maj, &mr.Min)
-	rf.uint64(&mr.Ino)
-	rf.uint64(&mr.InoGeneration)
-	rf.uint32(&mr.Prot, &mr.Flags)
-	rf.string(&mr.Filename)
-	rf.id(&mr.RecordID, ev)
+	f := raw.fields()
+	f.uint32(&mr.Pid, &mr.Tid)
+	f.uint64(&mr.Addr)
+	f.uint64(&mr.Len)
+	f.uint64(&mr.Pgoff)
+	f.uint32(&mr.Maj, &mr.Min)
+	f.uint64(&mr.Ino)
+	f.uint64(&mr.InoGeneration)
+	f.uint32(&mr.Prot, &mr.Flags)
+	f.string(&mr.Filename)
+	f.id(&mr.RecordID, ev)
 }
 
 type AuxRecord struct {
@@ -1451,11 +1440,11 @@ type AuxRecord struct {
 
 func (ar *AuxRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	ar.RecordHeader = raw.Header
-	rf := raw.fields()
-	rf.uint64(&ar.AuxOffset)
-	rf.uint64(&ar.AuxSize)
-	rf.uint64(&ar.Flags)
-	rf.id(&ar.RecordID, ev)
+	f := raw.fields()
+	f.uint64(&ar.AuxOffset)
+	f.uint64(&ar.AuxSize)
+	f.uint64(&ar.Flags)
+	f.id(&ar.RecordID, ev)
 }
 
 type ItraceStartRecord struct {
@@ -1467,9 +1456,9 @@ type ItraceStartRecord struct {
 
 func (ir *ItraceStartRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	ir.RecordHeader = raw.Header
-	rf := raw.fields()
-	rf.uint32(&ir.Pid, &ir.Tid)
-	rf.id(&ir.RecordID, ev)
+	f := raw.fields()
+	f.uint32(&ir.Pid, &ir.Tid)
+	f.id(&ir.RecordID, ev)
 }
 
 type SwitchRecord struct {
@@ -1479,8 +1468,8 @@ type SwitchRecord struct {
 
 func (sr *SwitchRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	sr.RecordHeader = raw.Header
-	rf := raw.fields()
-	rf.id(&sr.RecordID, ev)
+	f := raw.fields()
+	f.id(&sr.RecordID, ev)
 }
 
 type CPUWideSwitchRecord struct {
@@ -1492,9 +1481,9 @@ type CPUWideSwitchRecord struct {
 
 func (sr *CPUWideSwitchRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	sr.RecordHeader = raw.Header
-	rf := raw.fields()
-	rf.uint32(&sr.Pid, &sr.Tid)
-	rf.id(&sr.RecordID, ev)
+	f := raw.fields()
+	f.uint32(&sr.Pid, &sr.Tid)
+	f.id(&sr.RecordID, ev)
 }
 
 type NamespacesRecord struct {
@@ -1510,24 +1499,23 @@ type NamespacesRecord struct {
 
 func (nr *NamespacesRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	nr.RecordHeader = raw.Header
-	rf := raw.fields()
-	rf.uint32(&nr.Pid, &nr.Tid)
+	f := raw.fields()
+	f.uint32(&nr.Pid, &nr.Tid)
 	var num uint64
-	rf.uint64(&num)
+	f.uint64(&num)
 	nr.Namespaces = make([]struct{ Dev, Inode uint64 }, num)
 	for i := 0; i < int(num); i++ {
-		rf.uint64(&nr.Namespaces[i].Dev)
-		rf.uint64(&nr.Namespaces[i].Inode)
+		f.uint64(&nr.Namespaces[i].Dev)
+		f.uint64(&nr.Namespaces[i].Inode)
 	}
-	rf.id(&nr.RecordID, ev)
+	f.id(&nr.RecordID, ev)
 }
 
-// A File wraps a perf.data file and decodes the records therein.
+// A File wraps a pef.data file and decodes the records therein.
 type File struct {
-	fd *os.File
 }
 
-// OpenFile opens a perf.data file for reading.
+// OpenFile opens a pef.data file for reading.
 func OpenFile(r io.ReaderAt) (*File, error) {
 	panic("not implemented")
 }
