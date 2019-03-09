@@ -9,7 +9,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -1694,21 +1693,6 @@ func (nr *NamespacesRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	}
 	f.id(&nr.RecordID, ev)
 }
-
-// A File wraps a pef.data file and decodes the records therein.
-type File struct {
-}
-
-// OpenFile opens a pef.data file for reading.
-func OpenFile(r io.ReaderAt) (*File, error) {
-	panic("not implemented")
-}
-
-func (f *File) ReadRawRecord(rr *RawRecord) error {
-	panic("not implemented")
-}
-
-// TODO(acln): github.com/aclements/go-perf/perffile has perhaps a nicer API than this: investigate
 
 func marshalBitwiseUint64(fields []bool) uint64 {
 	var res uint64
