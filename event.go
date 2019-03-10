@@ -572,7 +572,7 @@ func ProbePMU(name string) (EventType, error) {
 // HardwareCounter is a hardware performance counter.
 type HardwareCounter uint64
 
-// Hardware counters.
+// Hardware performance counters.
 const (
 	CPUCycles             HardwareCounter = unix.PERF_COUNT_HW_CPU_CYCLES
 	Instructions          HardwareCounter = unix.PERF_COUNT_HW_INSTRUCTIONS
@@ -615,7 +615,7 @@ func AllHardwareCounters() []TODOInterfaceName {
 // SoftwareCounter is a software performance counter.
 type SoftwareCounter uint64
 
-// Software counters.
+// Software performance counters.
 const (
 	CPUClock        SoftwareCounter = unix.PERF_COUNT_SW_CPU_CLOCK
 	TaskClock       SoftwareCounter = unix.PERF_COUNT_SW_TASK_CLOCK
@@ -703,8 +703,8 @@ func AllCacheOpResults() []CacheOpResult {
 	return []CacheOpResult{Access, Miss}
 }
 
-// A HardwareCacheCounter groups a cache, a cache operation, and an
-// operation result.
+// A HardwareCacheCounter groups a cache, a cache operation, and an operation
+// result.
 type HardwareCacheCounter struct {
 	Cache  Cache
 	Op     CacheOp
@@ -720,8 +720,8 @@ func (hwcc HardwareCacheCounter) MarshalAttr() Attr {
 	return Attr{Type: HardwareCacheEvent, Config: config}
 }
 
-// HardwareCacheCounters returns triples of cache counters, measuring the specified
-// caches, operations and results.
+// HardwareCacheCounters returns cache counters which measure the cartesian
+// product of the specified caches, operations and results.
 func HardwareCacheCounters(caches []Cache, ops []CacheOp, results []CacheOpResult) []TODOInterfaceName {
 	counters := make([]TODOInterfaceName, 0, len(caches)*len(ops)*len(results))
 	for _, cache := range caches {
@@ -740,9 +740,9 @@ func HardwareCacheCounters(caches []Cache, ops []CacheOp, results []CacheOpResul
 }
 
 // NewTracepoint probes /sys/kernel/debug/tracing/events/<category>/<event>/id
-// for the value of the trace point associated with the specified category and
-// event, and returns an *MarshalAttr with the Type and Config fields set
-// to the appropriate values.
+// for the value of the trace point associated with the specified category
+// and event, and returns an *MarshalAttr with the Type and Config fields
+// set to the appropriate values.
 func NewTracepoint(category string, event string) (*Attr, error) {
 	f := filepath.Join("/sys/kernel/debug/tracing/events", category, event, "id")
 	content, err := ioutil.ReadFile(f)
@@ -808,9 +808,10 @@ const (
 
 // ExecutionBreakpointLength returns the length of an execution breakpoint.
 //
-// TODO(acln): is this correct? The man page says to set this to sizeof(long).
-// Is sizeof(C long) == sizeof(Go uintptr) on all platforms of interest?
 func ExecutionBreakpointLength() BreakpointLength {
+	// TODO(acln): is this correct? The man page says to set this to
+	// sizeof(long). Is sizeof(C long) == sizeof(Go uintptr) on all
+	// platforms of interest?
 	var x uintptr
 	return BreakpointLength(unsafe.Sizeof(x))
 }
@@ -889,34 +890,127 @@ func (f CountFormat) marshal() uint64 {
 
 // Options contains low level event options.
 type Options struct {
-	Disabled               bool // off by default
-	Inherit                bool // children inherit it
-	Pinned                 bool // must always be on PMU
-	Exclusive              bool // only group on PMU
-	ExcludeUser            bool // don't count user
-	ExcludeKernel          bool // ditto kernel
-	ExcludeHypervisor      bool // ditto hypervisor
-	ExcludeIdle            bool // don't count when idle
-	Mmap                   bool // include mmap data
-	Comm                   bool // include comm data
-	Freq                   bool // use frequency, not period
-	InheritStat            bool // per task counts
-	EnableOnExec           bool // next exec enables
-	Task                   bool // trace fork/exit
-	Watermark              bool // wake up at watermark
-	PreciseIP              Skid // skid constraint
-	MmapData               bool // non-exec mmap data
-	RecordIDAll            bool // include all events in RecordFormat
-	ExcludeHost            bool // don't count in host
-	ExcludeGuest           bool // don't count in guest
-	ExcludeCallchainKernel bool // exclude kernel callchains
-	ExcludeCallchainUser   bool // exclude user callchains
-	Mmap2                  bool // include mmap with inode data
-	CommExec               bool // flag comm events that are due to an exec
-	UseClockID             bool // use ClockID for time fields
-	ContextSwitch          bool // context switch data
-	writeBackward          bool // not supported
-	Namespaces             bool // include namespaces data
+	// Disabled disables the event by default. If the event is in a
+	// group, but not a group leader, this option has no effect, since
+	// the group leader controls when events are enabled or disabled.
+	Disabled bool
+
+	// Inherit specifies that this counter should count events of child
+	// tasks as well as the specified task. This only applies to new
+	// children, not to any existing children at the time the counter
+	// is created (nor to any new children of existing children).
+	//
+	// Inherit does not work with some combination of CountFormat options,
+	// such as CountFormat.Group.
+	Inherit bool
+
+	// Pinned specifies that the counter should always be on the CPU if
+	// possible. This bit applies only to hardware counters, and only
+	// to group leaders. If a pinned counter canno be put onto the CPU,
+	// then the counter goes into an error state, where reads return EOF,
+	// until it is subsequently enabled or disabled.
+	Pinned bool
+
+	// Exclusive specifies that when this counter's group is on the CPU,
+	// it should be the only group using the CPUs counters.
+	Exclusive bool
+
+	// ExcludeUser excludes events that happen in user space.
+	ExcludeUser bool
+
+	// ExcludeKernel excludes events that happen in kernel space.
+	ExcludeKernel bool
+
+	// ExcludeHypervisor excludes events that happen in the hypervisor.
+	ExcludeHypervisor bool
+
+	// ExcludeIdle disables counting while the CPU is idle.
+	ExcludeIdle bool
+
+	// The mmap bit enables generation of MmapRecord records for every
+	// mmap(2) call that has PROT_EXEC set.
+	Mmap bool
+
+	// Comm enables tracking of process command name, as modified by
+	// exec(2), prctl(PR_SET_NAME), as well as writing to /proc/self/comm.
+	// If CommExec is also set, then the CommRecord records produced
+	// can be queries using the WasExec method, to differentiate exec(2)
+	// from the other ases.
+	Comm bool
+
+	// Freq configures the event to use sample frequency, rather than
+	// sample period. See also Attr.Sample.
+	Freq bool
+
+	// InheritStat enables saving of event counts on context switch for
+	// inherited tasks. InheritStat is only meaningful if Inherit is
+	// also set.
+	InheritStat bool
+
+	// EnableOnExec configures the counter to be enabled automatically
+	// after a call to exec(2).
+	EnableOnExec bool
+
+	// Task configures the event to include fork/exit notifications in
+	// the ring buffer.
+	Task bool
+
+	// Watermark configures the ring buffer to issue an overflow
+	// notification when the Wakeup boundary is crossed. If not set,
+	// notifications happen after Wakeup samples. See also Attr.Wakeup.
+	Watermark bool
+
+	// PreciseIP controls the number of instructions between an event of
+	// interest happening and the kernel being able to stop and record
+	// the event.
+	PreciseIP Skid
+
+	// MmapData is the counterpart to Mmap. It enables generation of
+	// MmapRecord records for mmap(2) calls that do not have PROT_EXEC
+	// set.
+	MmapData bool
+
+	// RecordIDAll configures Tid, Time, ID, StreamID and CPU samples
+	// to be included in non-Sample records.
+	RecordIDAll bool
+
+	// ExcludeHost configures only events happening inside a guest
+	// instance (one that has executed a KVM_RUN ioctl) to be measured.
+	ExcludeHost bool
+
+	// ExcludeGuest is the opposite of ExcludeHost: it configures only
+	// events outside a guest instance to be measured.
+	ExcludeGuest bool
+
+	// ExcludeKernelCallchain excludes kernel callchains.
+	ExcludeKernelCallchain bool
+
+	// ExcludeUserCallchain excludes user callchains.
+	ExcludeUserCallchain bool
+
+	// Mmap2 configures mmap(2) events to include inode data.
+	Mmap2 bool
+
+	// CommExec allows the distinction between process renaming
+	// via exec(2) or via other means. See also Comm, and
+	// (*CommRecord).WasExec.
+	CommExec bool
+
+	// UseClockID allows selecting which internal linux clock to use
+	// when generating timestamps via the ClockID field.
+	UseClockID bool
+
+	// ContextSwitch enables the generation of SwitchRecord records,
+	// and SwitchCPUWideRecord records when sampling in CPU-wide mode.
+	ContextSwitch bool
+
+	// writeBackward configures the kernel to write to the memory
+	// mapped ring buffer backwards. This option is not supported by
+	// this package.
+	writeBackward bool
+
+	// Namespaces enables the generation of NamespacesRecord records.
+	Namespaces bool
 }
 
 func (opt Options) marshal() uint64 {
@@ -941,8 +1035,8 @@ func (opt Options) marshal() uint64 {
 		opt.RecordIDAll,
 		opt.ExcludeHost,
 		opt.ExcludeGuest,
-		opt.ExcludeCallchainKernel,
-		opt.ExcludeCallchainUser,
+		opt.ExcludeKernelCallchain,
+		opt.ExcludeUserCallchain,
 		opt.Mmap2,
 		opt.CommExec,
 		opt.UseClockID,
