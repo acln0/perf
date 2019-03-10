@@ -611,141 +611,6 @@ type SampleRecord struct {
 	PhysicalAddress      uint64
 }
 
-type DataSource uint64 // TODO(acln): implement
-
-// MemOp is a memory operation.
-type MemOp uint8
-
-// Known memory operations.
-//
-// TODO(acln): add these to x/sys/unix?
-const (
-	MemOpNA MemOp = 1 << iota
-	MemOpLoad
-	MemOpStore
-	MemOpPrefetch
-	MemOpExec
-
-	memOpShift = 0
-)
-
-// MemLevel is a memory level.
-type MemLevel uint32
-
-// Known memory levels.
-const (
-	MemLevelNA MemLevel = 1 << iota
-	MemLevelHit
-	MemLevelMiss
-	MemLevelL1
-	MemLevelLFB
-	MemLevelL2
-	MemLevelL3
-	MemLevelLocalDRAM
-	MemLevelRemoteDRAM1
-	MemLevelRemoteDRAM2
-	MemLevelRemoteCache1
-	MemLevelRemoteCache2
-	MemLevelIO
-	MemLevelUncached
-
-	memLevelShift = 5
-)
-
-const memRemoteShift = 37
-
-// MemLevelNumber is a memory level number.
-type MemLevelNumber uint8
-
-// Known memory level numbers.
-const (
-	MemLevelNumberL1 MemLevelNumber = iota
-	MemLevelNumberL2
-	MemLevelNumberL3
-	MemLevelNumberL4
-
-	MemLevelNumberAnyCache = iota + 0x0b
-	MemLevelNumberLFB
-	MemLevelNumberRAM
-	MemLevelNumberPMem
-	MemLevelNumberNA
-
-	memLevelNumShift = 33
-)
-
-// MemSnoopMode is a memory snoop mode.
-type MemSnoopMode uint8
-
-// Known memory snoop modes.
-const (
-	MemSnoopModeNA = 1 << iota
-	MemSnoopModeNone
-	MemSnoopModeHit
-	MemSnoopModeMiss
-	MemSnoopModeHitModified
-
-	memShoopModeShift = 19
-)
-
-// TODO: missing PERF_MEM_SNOOPX_*, PERF_MEM_LOCK_*, PERF_MEM_TLB_*
-
-// Transaction is a source of a transactional memory abort.
-type Transaction uint64
-
-// PERF_TXN_* bits.
-//
-// TODO(acln): add to x/sys/unix?
-const (
-	txnElision = 1 << iota
-	txnTransaction
-	txnSync
-	txnAsync
-	txnRetry
-	txnConflict
-	txnCapacityWrite
-	txnCapacityRead
-)
-
-// Elision indicates an abort from an elision type transaction (Intel CPU
-// specific).
-func (txn Transaction) Elision() bool { return txn.set(txnElision) }
-
-// Transaction indicates an abort from a generic transaction.
-func (txn Transaction) Transaction() bool { return txn.set(txnTransaction) }
-
-// Sync indicates a synchronous abort (related to the reported instruction).
-func (txn Transaction) Sync() bool { return txn.set(txnSync) }
-
-// Async indicates an asynchronous abort (unrelated to the reported
-// instruction).
-func (txn Transaction) Async() bool { return txn.set(txnAsync) }
-
-// Retryable indicates whether retrying the transaction may have succeeded.
-func (txn Transaction) Retryable() bool { return txn.set(txnRetry) }
-
-// Conflict indicates an abort rue to memory conflicts with other threads.
-func (txn Transaction) Conflict() bool { return txn.set(txnConflict) }
-
-// WriteCapacity indicates an abort due to write capacity overflow.
-func (txn Transaction) WriteCapacity() bool { return txn.set(txnCapacityWrite) }
-
-// ReadCapacity indicates an abort due to read capacity overflow.
-func (txn Transaction) ReadCapacity() bool { return txn.set(txnCapacityRead) }
-
-func (txn Transaction) set(bit Transaction) bool { return txn&bit != 0 }
-
-// txnAbortMask is PERF_TXN_ABORT_MASK
-const txnAbortMask = 0xffffffff // TODO(acln): add to x/sys/unix?
-
-// txnAbortShift is PERF_TXN_ABORT_SHIFT
-const txnAbortShift = 32 // TODO(acln): add to x/sys/unix?
-
-// UserAbortCode returns the user-specified abort code associated with
-// the transaction.
-func (txn Transaction) UserAbortCode() uint32 {
-	return uint32((txn >> txnAbortShift) & txnAbortMask)
-}
-
 func (sr *SampleRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	sr.RecordHeader = raw.Header
 	f := raw.fields()
@@ -1165,4 +1030,137 @@ func (nr *NamespacesRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 		f.uint64(&nr.Namespaces[i].Inode)
 	}
 	f.id(&nr.RecordID, ev)
+}
+
+type DataSource uint64 // TODO(acln): implement
+
+// MemOp is a memory operation.
+type MemOp uint8
+
+// Known memory operations.
+//
+// TODO(acln): add these to x/sys/unix?
+const (
+	MemOpNA MemOp = 1 << iota
+	MemOpLoad
+	MemOpStore
+	MemOpPrefetch
+	MemOpExec
+
+	memOpShift = 0
+)
+
+// MemLevel is a memory level.
+type MemLevel uint32
+
+// Known memory levels.
+//
+// TODO(acln): add these to x/sys/unix?
+const (
+	MemLevelNA MemLevel = 1 << iota
+	MemLevelHit
+	MemLevelMiss
+	MemLevelL1
+	MemLevelLFB
+	MemLevelL2
+	MemLevelL3
+	MemLevelLocalDRAM
+	MemLevelRemoteDRAM1
+	MemLevelRemoteDRAM2
+	MemLevelRemoteCache1
+	MemLevelRemoteCache2
+	MemLevelIO
+	MemLevelUncached
+
+	memLevelShift = 5
+)
+
+const memRemoteShift = 37
+
+// MemLevelNumber is a memory level number.
+type MemLevelNumber uint8
+
+// Known memory level numbers.
+//
+// TODO(acln): add these to x/sys/unix?
+const (
+	MemLevelNumberL1 MemLevelNumber = iota
+	MemLevelNumberL2
+	MemLevelNumberL3
+	MemLevelNumberL4
+
+	MemLevelNumberAnyCache MemLevelNumber = iota + 0x0b
+	MemLevelNumberLFB
+	MemLevelNumberRAM
+	MemLevelNumberPMem
+	MemLevelNumberNA
+
+	memLevelNumShift = 33
+)
+
+// MemSnoopMode is a memory snoop mode.
+type MemSnoopMode uint8
+
+// Known memory snoop modes.
+const (
+	MemSnoopModeNA MemSnoopMode = 1 << iota
+	MemSnoopModeNone
+	MemSnoopModeHit
+	MemSnoopModeMiss
+	MemSnoopModeHitModified
+
+	memShoopModeShift = 19
+)
+
+// TODO: missing PERF_MEM_SNOOPX_*, PERF_MEM_LOCK_*, PERF_MEM_TLB_*
+
+// Transaction describes a transactional memory abort.
+type Transaction uint64
+
+// Bit set for transactions, to be tested against the Transaction value.
+//
+// TODO(acln): add the corresponding values to x/sys/unix?
+const (
+	// Transaction Elision indicates an abort from an elision type
+	// transaction (Intel CPU specific).
+	TransactionElision = 1 << iota
+
+	// TransactionGeneric indicates an abort from a generic transaction.
+	TransactionGeneric
+
+	// TransactionSync indicates a synchronous abort (related to the
+	// reported instruction).
+	TransactionSync
+
+	// TransactionAsync indicates an asynchronous abort (unrelated to
+	// the reported instruction).
+	TransactionAsync
+
+	// TransactionRetryable indicates whether retrying the transaction
+	// may have succeeded.
+	TransactionRetryable
+
+	// TransactionConflict indicates an abort rue to memory conflicts
+	// with other threads.
+	TransactionConflict
+
+	// TransactionWriteCapacity indicates an abort due to write capacity
+	// overflow.
+	TransactionWriteCapacity
+
+	// TransactionReadCapacity indicates an abort due to read capacity
+	// overflow.
+	TransactionReadCapacity
+)
+
+// txnAbortMask is PERF_TXN_ABORT_MASK
+const txnAbortMask = 0xffffffff // TODO(acln): add to x/sys/unix?
+
+// txnAbortShift is PERF_TXN_ABORT_SHIFT
+const txnAbortShift = 32 // TODO(acln): add to x/sys/unix?
+
+// UserAbortCode returns the user-specified abort code associated with
+// the transaction.
+func (txn Transaction) UserAbortCode() uint32 {
+	return uint32((txn >> txnAbortShift) & txnAbortMask)
 }
