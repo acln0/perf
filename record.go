@@ -1117,13 +1117,13 @@ const (
 // Transaction describes a transactional memory abort.
 type Transaction uint64
 
-// Bit set for transactions, to be tested against the Transaction value.
+// Transaction bits: values should be &-ed with Transaction values.
 //
 // TODO(acln): add the corresponding values to x/sys/unix?
 const (
 	// Transaction Elision indicates an abort from an elision type
 	// transaction (Intel CPU specific).
-	TransactionElision = 1 << iota
+	TransactionElision Transaction = 1 << iota
 
 	// TransactionGeneric indicates an abort from a generic transaction.
 	TransactionGeneric
