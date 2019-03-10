@@ -24,5 +24,5 @@ func (g *Group) Add(counters ...TODOInterfaceName) {
 }
 
 type TODOInterfaceName interface {
-	MarshalAttr() Attr
+	MarshalAttr() *Attr
 }

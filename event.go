@@ -248,7 +248,7 @@ func (ev *Event) Disable() error {
 	return ioctlDisable(ev.fd)
 }
 
-// TODO(acln): (*Event).Refresh, which means handling POLLHUP
+// TODO(acln): support (*Event).Refresh and the POLLHUP machinery?
 
 // Reset resets the counters associated with the event.
 func (ev *Event) Reset() error {
@@ -592,8 +592,8 @@ func (hwc HardwareCounter) Label() string {
 	panic("not implemented")
 }
 
-func (hwc HardwareCounter) MarshalAttr() Attr {
-	return Attr{Type: HardwareEvent, Config: uint64(hwc)}
+func (hwc HardwareCounter) MarshalAttr() *Attr {
+	return &Attr{Type: HardwareEvent, Config: uint64(hwc)}
 }
 
 // AllHardwareCounters returns a slice of all known hardware counters.
@@ -634,8 +634,8 @@ func (swc SoftwareCounter) Label() string {
 	panic("not implemented")
 }
 
-func (swc SoftwareCounter) MarshalAttr() Attr {
-	return Attr{Type: SoftwareEvent, Config: uint64(swc)}
+func (swc SoftwareCounter) MarshalAttr() *Attr {
+	return &Attr{Type: SoftwareEvent, Config: uint64(swc)}
 }
 
 // AllSoftwareCounters returns a slice of all known software counters.
@@ -715,9 +715,9 @@ func (hwcc HardwareCacheCounter) Label() string {
 	panic("not implemented")
 }
 
-func (hwcc HardwareCacheCounter) MarshalAttr() Attr {
+func (hwcc HardwareCacheCounter) MarshalAttr() *Attr {
 	config := uint64(hwcc.Cache) | uint64(hwcc.Op<<8) | uint64(hwcc.Result<<16)
-	return Attr{Type: HardwareCacheEvent, Config: config}
+	return &Attr{Type: HardwareCacheEvent, Config: config}
 }
 
 // HardwareCacheCounters returns cache counters which measure the cartesian
@@ -741,8 +741,8 @@ func HardwareCacheCounters(caches []Cache, ops []CacheOp, results []CacheOpResul
 
 // NewTracepoint probes /sys/kernel/debug/tracing/events/<category>/<event>/id
 // for the value of the trace point associated with the specified category
-// and event, and returns an *MarshalAttr with the Type and Config fields
-// set to the appropriate values.
+// and event, and returns an *Attr with the Type and Config fields set to
+// the appropriate values.
 func NewTracepoint(category string, event string) (*Attr, error) {
 	f := filepath.Join("/sys/kernel/debug/tracing/events", category, event, "id")
 	content, err := ioutil.ReadFile(f)
@@ -757,7 +757,7 @@ func NewTracepoint(category string, event string) (*Attr, error) {
 	return &Attr{Type: TracepointEvent, Config: config}, nil
 }
 
-// NewBreakpoint returns an MarshalAttr configured to record breakpoint events.
+// NewBreakpoint returns an *Attr configured to record breakpoint events.
 //
 // typ is the type of the breakpoint.
 //
@@ -768,7 +768,7 @@ func NewTracepoint(category string, event string) (*Attr, error) {
 // length is the length of the breakpoint being measured.
 //
 // Breakpoint sets the Type, BreakpointType, Config1 and Config2 fields on
-// the returned MarshalAttr.
+// the returned Attr.
 func NewBreakpoint(typ BreakpointType, addr uint64, length BreakpointLength) *Attr {
 	return &Attr{
 		Type:           BreakpointEvent,

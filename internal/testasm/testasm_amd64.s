@@ -4,17 +4,10 @@
 
 #include "textflag.h"
 
-TEXT ·Sum(SB),NOSPLIT,$0-24
-	MOVQ a+0(FP), AX
-	MOVQ b+8(FP), BX
-	ADDQ BX, AX
-	MOVQ AX, ret+16(FP)
-	RET
-
 TEXT ·SumN(SB),NOSPLIT,$0-16
 	MOVQ $0, AX
 	MOVQ $0, BX
-	MOVQ n+0(FP), CX
+	MOVQ N+0(FP), CX
 loop:
 	ADDQ BX, AX
 	ADDQ $1, BX

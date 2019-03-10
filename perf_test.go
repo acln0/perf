@@ -15,36 +15,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func TestInstructionCount(t *testing.T) {
-	attr := Instructions.MarshalAttr()
-	attr.CountFormat = CountFormat{
-		TotalTimeEnabled: true,
-		TotalTimeRunning: true,
-		ID:               true,
-	}
-	attr.Options.Disabled = true
-	attr.Options.ExcludeKernel = true
-	attr.Options.ExcludeHypervisor = true
-
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-
-	ev, err := Open(&attr, CallingThread, AnyCPU, nil, 0)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	defer ev.Close()
-
-	count, err := ev.Measure(func() {
-		testasm.SumN(50000)
-	})
-	if err != nil {
-		t.Fatalf("Measure: %v", err)
-	}
-
-	t.Logf("got %+v\n", count)
-}
-
 func TestManualGroupWire(t *testing.T) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
@@ -64,13 +34,13 @@ func TestManualGroupWire(t *testing.T) {
 	cycles.Options.ExcludeKernel = true
 	cycles.Options.ExcludeHypervisor = true
 
-	iev, err := Open(&insns, CallingThread, AnyCPU, nil, 0)
+	iev, err := Open(insns, CallingThread, AnyCPU, nil, 0)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer iev.Close()
 
-	cev, err := Open(&cycles, CallingThread, AnyCPU, iev, 0)
+	cev, err := Open(cycles, CallingThread, AnyCPU, iev, 0)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

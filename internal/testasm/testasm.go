@@ -4,6 +4,7 @@
 
 package testasm
 
-func Sum(a, b int) int
-
-func SumN(n int) int
+// SumN computes the sum of integers from 1 to N.
+//
+// It executes ~4*N + 5 instructions.
+func SumN(N uint64) uint64
