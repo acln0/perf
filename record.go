@@ -1080,6 +1080,8 @@ func (ds DataSource) MemTLB() MemTLB {
 type MemOp uint8
 
 // MemOp flag bits.
+//
+// TODO(acln): add the corresponding values to x/sys/unix?
 const (
 	MemOpNA MemOp = 1 << iota
 	MemOpLoad
@@ -1094,6 +1096,8 @@ const (
 type MemLevel uint32
 
 // MemLevel flag bits.
+//
+// TODO(acln): add the corresponding values to x/sys/unix?
 const (
 	MemLevelNA MemLevel = 1 << iota
 	MemLevelHit
@@ -1117,6 +1121,8 @@ const (
 type MemRemote uint8
 
 // MemRemote flag bits.
+//
+// TODO(acln): add the corresponding values to x/sys/unix?
 const (
 	MemRemoteRemote MemRemote = 1 << iota
 
@@ -1127,6 +1133,8 @@ const (
 type MemLevelNumber uint8
 
 // MemLevelNumber flag bits.
+//
+// TODO(acln): add the corresponding values to x/sys/unix?
 const (
 	MemLevelNumberL1 MemLevelNumber = iota
 	MemLevelNumberL2
@@ -1146,6 +1154,8 @@ const (
 type MemSnoopMode uint8
 
 // MemSnoopMode flag bits.
+//
+// TODO(acln): add the corresponding values to x/sys/unix?
 const (
 	MemSnoopModeNA MemSnoopMode = 1 << iota
 	MemSnoopModeNone
@@ -1160,6 +1170,8 @@ const (
 type MemSnoopModeX uint8
 
 // MemSnoopModeX flag bits.
+//
+// TODO(acln): add the corresponding values to x/sys/unix?
 const (
 	MemSnoopModeXForward MemSnoopModeX = 0x01 // forward
 
@@ -1170,6 +1182,8 @@ const (
 type MemLock uint8
 
 // MemLock flag bits.
+//
+// TODO(acln): add the corresponding values to x/sys/unix?
 const (
 	MemLockNA     MemLock = 1 << iota // not available
 	MemLockLocked                     // locked transaction
@@ -1181,6 +1195,8 @@ const (
 type MemTLB uint8
 
 // MemTLB flag bits.
+//
+// TODO(acln): add the corresponding values to x/sys/unix?
 const (
 	MemTLBNA   MemTLB = 1 << iota // not available
 	MemTLBHit                     // hit level
