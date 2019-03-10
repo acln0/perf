@@ -75,7 +75,8 @@ type Event struct {
 	group []*Event
 
 	// attr is the set of attributes the Event was configured with.
-	attr Attr
+	// It is a clone of the original.
+	attr *Attr
 
 	// ring is the (entire) memory mapped ring buffer.
 	ring []byte
@@ -129,7 +130,7 @@ const numRingPages = 128
 // associated with the specified group Event. If group is non-nil, and
 // FlagNoGroup | FlagFDOutput are not set, the attr.Options.Disabled setting
 // is ignored: the group leader controls when the entire group is enabled.
-func Open(attr Attr, pid, cpu int, group *Event, flags Flag) (*Event, error) {
+func Open(attr *Attr, pid, cpu int, group *Event, flags Flag) (*Event, error) {
 	groupfd := -1
 	if group != nil {
 		if err := group.ok(); err != nil {
@@ -160,10 +161,12 @@ func Open(attr Attr, pid, cpu int, group *Event, flags Flag) (*Event, error) {
 		unix.Close(fd)
 		return nil, os.NewSyscallError("eventfd", err)
 	}
+	attrClone := new(Attr)
+	*attrClone = *attr // ok to copy since no slices
 	ev := &Event{
 		state:    eventStateOK,
 		fd:       fd,
-		attr:     attr,
+		attr:     attrClone,
 		ring:     ring,
 		ringdata: ringdata,
 		meta:     meta,
@@ -366,10 +369,7 @@ func (ev *Event) ReadCount() (Count, error) {
 		return c, os.NewSyscallError("read", err)
 	}
 	f := fields(buf)
-	f.uint64(&c.Value)
-	f.durationIf(ev.attr.CountFormat.TotalTimeEnabled, &c.TimeEnabled)
-	f.durationIf(ev.attr.CountFormat.TotalTimeRunning, &c.TimeRunning)
-	f.uint64If(ev.attr.CountFormat.ID, &c.ID)
+	f.count(&c, ev)
 	return c, err
 }
 
@@ -403,15 +403,7 @@ func (ev *Event) ReadGroupCount() (GroupCount, error) {
 		return gc, os.NewSyscallError("read", err)
 	}
 	f := fields(buf)
-	var nr uint64
-	f.uint64(&nr)
-	f.durationIf(ev.attr.CountFormat.TotalTimeEnabled, &gc.TimeEnabled)
-	f.durationIf(ev.attr.CountFormat.TotalTimeRunning, &gc.TimeRunning)
-	gc.Counts = make([]struct{ Value, ID uint64 }, nr)
-	for i := 0; i < int(nr); i++ {
-		f.uint64(&gc.Counts[i].Value)
-		f.uint64If(ev.attr.CountFormat.ID, &gc.Counts[i].ID)
-	}
+	f.groupCount(&gc, ev)
 	return gc, nil
 }
 

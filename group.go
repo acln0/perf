@@ -9,7 +9,13 @@ type Group struct {
 	// ...
 }
 
-func (g *Group) Open(pid int, cpu int, flags Flag) (*Event, error) {
+func NewGroup(counters ...TODOInterfaceName) *Group {
+	g := new(Group)
+	g.Add(counters...)
+	return g
+}
+
+func (g *Group) Open(pid int, cpu int) (*Event, error) {
 	panic("not implemented")
 }
 

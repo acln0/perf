@@ -29,7 +29,7 @@ func TestInstructionCount(t *testing.T) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	ev, err := Open(attr, CallingThread, AnyCPU, nil, 0)
+	ev, err := Open(&attr, CallingThread, AnyCPU, nil, 0)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -64,13 +64,13 @@ func TestManualGroupWire(t *testing.T) {
 	cycles.Options.ExcludeKernel = true
 	cycles.Options.ExcludeHypervisor = true
 
-	iev, err := Open(insns, CallingThread, AnyCPU, nil, 0)
+	iev, err := Open(&insns, CallingThread, AnyCPU, nil, 0)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer iev.Close()
 
-	cev, err := Open(cycles, CallingThread, AnyCPU, iev, 0)
+	cev, err := Open(&cycles, CallingThread, AnyCPU, iev, 0)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -107,7 +107,7 @@ func TestTracepoint(t *testing.T) {
 		Watermark: true,
 	}
 
-	ev, err := Open(attr, CallingThread, AnyCPU, nil, 0)
+	ev, err := Open(&attr, CallingThread, AnyCPU, nil, 0)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

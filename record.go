@@ -29,7 +29,7 @@ func (ev *Event) ReadRecord(ctx context.Context) (Record, error) {
 	if err := ev.ReadRawRecord(ctx, &raw); err != nil {
 		return nil, err
 	}
-	rec, err := newRecord(raw.Header.Type)
+	rec, err := newRecord(ev, raw.Header.Type)
 	if err != nil {
 		return nil, err
 	}
@@ -325,31 +325,46 @@ type RawRecord struct {
 
 func (raw RawRecord) fields() fields { return fields(raw.Data) }
 
-var newRecordFuncs = [...]func() Record{
-	RecordTypeMmap:          func() Record { return &MmapRecord{} },
-	RecordTypeLost:          func() Record { return &LostRecord{} },
-	RecordTypeComm:          func() Record { return &CommRecord{} },
-	RecordTypeExit:          func() Record { return &ExitRecord{} },
-	RecordTypeThrottle:      func() Record { return &ThrottleRecord{} },
-	RecordTypeUnthrottle:    func() Record { return &UnthrottleRecord{} },
-	RecordTypeFork:          func() Record { return &ForkRecord{} },
-	RecordTypeRead:          func() Record { return &ReadRecord{} },
-	RecordTypeSample:        func() Record { return &SampleRecord{} },
-	RecordTypeMmap2:         func() Record { return &Mmap2Record{} },
-	RecordTypeAux:           func() Record { return &AuxRecord{} },
-	RecordTypeItraceStart:   func() Record { return &ItraceStartRecord{} },
-	RecordTypeLostSamples:   func() Record { return &LostSamplesRecord{} },
-	RecordTypeSwitch:        func() Record { return &SwitchRecord{} },
-	RecordTypeSwitchCPUWide: func() Record { return &SwitchCPUWideRecord{} },
-	RecordTypeNamespaces:    func() Record { return &NamespacesRecord{} },
+var newRecordFuncs = [...]func(ev *Event) Record{
+	RecordTypeMmap:          func(_ *Event) Record { return &MmapRecord{} },
+	RecordTypeLost:          func(_ *Event) Record { return &LostRecord{} },
+	RecordTypeComm:          func(_ *Event) Record { return &CommRecord{} },
+	RecordTypeExit:          func(_ *Event) Record { return &ExitRecord{} },
+	RecordTypeThrottle:      func(_ *Event) Record { return &ThrottleRecord{} },
+	RecordTypeUnthrottle:    func(_ *Event) Record { return &UnthrottleRecord{} },
+	RecordTypeFork:          func(_ *Event) Record { return &ForkRecord{} },
+	RecordTypeRead:          newReadRecord,
+	RecordTypeSample:        newSampleRecord,
+	RecordTypeMmap2:         func(_ *Event) Record { return &Mmap2Record{} },
+	RecordTypeAux:           func(_ *Event) Record { return &AuxRecord{} },
+	RecordTypeItraceStart:   func(_ *Event) Record { return &ItraceStartRecord{} },
+	RecordTypeLostSamples:   func(_ *Event) Record { return &LostSamplesRecord{} },
+	RecordTypeSwitch:        func(_ *Event) Record { return &SwitchRecord{} },
+	RecordTypeSwitchCPUWide: func(_ *Event) Record { return &SwitchCPUWideRecord{} },
+	RecordTypeNamespaces:    func(_ *Event) Record { return &NamespacesRecord{} },
 }
 
-// newRecord returns an empty Record of the given type.
-func newRecord(rt RecordType) (Record, error) {
+func newReadRecord(ev *Event) Record {
+	if ev.attr.CountFormat.Group {
+		return &ReadGroupRecord{}
+	}
+	return &ReadRecord{}
+}
+
+func newSampleRecord(ev *Event) Record {
+	if ev.attr.CountFormat.Group {
+		return &SampleGroupRecord{}
+	}
+	return &SampleRecord{}
+}
+
+// newRecord returns an empty Record of the given type, tailored for the
+// specified Event.
+func newRecord(ev *Event, rt RecordType) (Record, error) {
 	if !rt.known() {
 		return nil, fmt.Errorf("unknown record type %d", rt)
 	}
-	return newRecordFuncs[rt](), nil
+	return newRecordFuncs[rt](ev), nil
 }
 
 type MmapRecord struct {
@@ -481,7 +496,7 @@ type ReadRecord struct {
 	RecordHeader
 	Pid    uint32
 	Tid    uint32
-	Values CountFormat
+	Values Count
 	RecordID
 }
 
@@ -489,7 +504,22 @@ func (rr *ReadRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	rr.RecordHeader = raw.Header
 	f := raw.fields()
 	f.uint32(&rr.Pid, &rr.Tid)
-	// TODO(acln): values
+	f.count(&rr.Values, ev)
+}
+
+type ReadGroupRecord struct {
+	RecordHeader
+	Pid    uint32
+	Tid    uint32
+	Values GroupCount
+	RecordID
+}
+
+func (rr *ReadGroupRecord) DecodeFrom(raw *RawRecord, ev *Event) {
+	rr.RecordHeader = raw.Header
+	f := raw.fields()
+	f.uint32(&rr.Pid, &rr.Tid)
+	f.groupCount(&rr.Values, ev)
 }
 
 type SampleRecord struct {
@@ -507,17 +537,13 @@ type SampleRecord struct {
 	CPU        uint32
 	Res        uint32
 	Period     uint64
-	Values     CountFormat
+	Values     Count
 	Callchain  []uint64
 
 	// Non-ABI fields:
 
-	Data        []byte
-	BranchStack []struct {
-		From  uint64
-		To    uint64
-		Flags uint64
-	}
+	Data             []byte
+	BranchStack      []BranchEntry
 	UserRegsABI      uint64
 	UserRegs         []uint64
 	UserStackSize    uint64
@@ -534,18 +560,145 @@ type SampleRecord struct {
 func (sr *SampleRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	sr.RecordHeader = raw.Header
 	f := raw.fields()
-	f.uint64If(ev.attr.SampleFormat.Identifier, &sr.Identifier)
-	f.uint64If(ev.attr.SampleFormat.IP, &sr.IP)
-	f.uint32If(ev.attr.SampleFormat.Tid, &sr.Pid, &sr.Tid)
-	f.uint64If(ev.attr.SampleFormat.Time, &sr.Time)
-	f.uint64If(ev.attr.SampleFormat.Addr, &sr.Addr)
-	f.uint64If(ev.attr.SampleFormat.ID, &sr.ID)
-	f.uint64If(ev.attr.SampleFormat.StreamID, &sr.StreamID)
-	f.uint32If(ev.attr.SampleFormat.CPU, &sr.CPU, &sr.Res)
-	f.uint64If(ev.attr.SampleFormat.Period, &sr.Period)
-	// TODO(acln): values
-	// TODO(acln): callchain
+	f.uint64Cond(ev.attr.SampleFormat.Identifier, &sr.Identifier)
+	f.uint64Cond(ev.attr.SampleFormat.IP, &sr.IP)
+	f.uint32Cond(ev.attr.SampleFormat.Tid, &sr.Pid, &sr.Tid)
+	f.uint64Cond(ev.attr.SampleFormat.Time, &sr.Time)
+	f.uint64Cond(ev.attr.SampleFormat.Addr, &sr.Addr)
+	f.uint64Cond(ev.attr.SampleFormat.ID, &sr.ID)
+	f.uint64Cond(ev.attr.SampleFormat.StreamID, &sr.StreamID)
+	f.uint32Cond(ev.attr.SampleFormat.CPU, &sr.CPU, &sr.Res)
+	f.uint64Cond(ev.attr.SampleFormat.Period, &sr.Period)
+	if ev.attr.SampleFormat.Read {
+		f.count(&sr.Values, ev)
+	}
+	if ev.attr.SampleFormat.Callchain {
+		var nr uint64
+		f.uint64(&nr)
+		sr.Callchain = make([]uint64, nr)
+		for i := 0; i < len(sr.Callchain); i++ {
+			f.uint64(&sr.Callchain[i])
+		}
+	}
+	if ev.attr.SampleFormat.Raw {
+		f.bytes(&sr.Data)
+	}
+	if ev.attr.SampleFormat.BranchStack {
+		var nr uint64
+		f.uint64(&nr)
+		sr.BranchStack = make([]BranchEntry, nr)
+		for i := 0; i < len(sr.BranchStack); i++ {
+			var from, to, tmp uint64
+			f.uint64(&from)
+			f.uint64(&to)
+			f.uint64(&tmp)
+			sr.BranchStack[i] = BranchEntry{
+				From:             from,
+				To:               to,
+				Mispredicted:     tmp&(1<<0) != 0,
+				Predicted:        tmp&(1<<1) != 0,
+				InTransaction:    tmp&(1<<2) != 0,
+				TransactionAbort: tmp&(1<<3) != 0,
+				Cycles:           uint16((tmp << 44) >> 48),
+				BranchType:       uint8((tmp << 40) >> 44),
+			}
+		}
+	}
 	// TODO(acln): non-ABI bits
+}
+
+type SampleGroupRecord struct {
+	// ABI fields:
+	RecordHeader
+	Identifier uint64
+	IP         uint64
+	Pid        uint32
+	Tid        uint32
+	Time       uint64
+	Addr       uint64
+	ID         uint64
+	StreamID   uint64
+	CPU        uint32
+	Res        uint32
+	Period     uint64
+	Values     GroupCount
+	Callchain  []uint64
+
+	// Non-ABI fields:
+	Data             []byte
+	BranchStack      []BranchEntry
+	UserRegsABI      uint64
+	UserRegs         []uint64
+	UserStackSize    uint64
+	UserStackData    []uint64
+	UserStackDynSize uint64
+	Weight           uint64
+	DataSrc          uint64
+	Transaction      uint64
+	IntrRegsABI      uint64
+	IntrRegs         []uint64
+	PhysAddr         uint64
+}
+
+func (sr *SampleGroupRecord) DecodeFrom(raw *RawRecord, ev *Event) {
+	sr.RecordHeader = raw.Header
+	f := raw.fields()
+	f.uint64Cond(ev.attr.SampleFormat.Identifier, &sr.Identifier)
+	f.uint64Cond(ev.attr.SampleFormat.IP, &sr.IP)
+	f.uint32Cond(ev.attr.SampleFormat.Tid, &sr.Pid, &sr.Tid)
+	f.uint64Cond(ev.attr.SampleFormat.Time, &sr.Time)
+	f.uint64Cond(ev.attr.SampleFormat.Addr, &sr.Addr)
+	f.uint64Cond(ev.attr.SampleFormat.ID, &sr.ID)
+	f.uint64Cond(ev.attr.SampleFormat.StreamID, &sr.StreamID)
+	f.uint32Cond(ev.attr.SampleFormat.CPU, &sr.CPU, &sr.Res)
+	f.uint64Cond(ev.attr.SampleFormat.Period, &sr.Period)
+	if ev.attr.SampleFormat.Read {
+		f.groupCount(&sr.Values, ev)
+	}
+	if ev.attr.SampleFormat.Callchain {
+		var nr uint64
+		f.uint64(&nr)
+		sr.Callchain = make([]uint64, nr)
+		for i := 0; i < len(sr.Callchain); i++ {
+			f.uint64(&sr.Callchain[i])
+		}
+	}
+	if ev.attr.SampleFormat.Raw {
+		f.bytes(&sr.Data)
+	}
+	if ev.attr.SampleFormat.BranchStack {
+		var nr uint64
+		f.uint64(&nr)
+		sr.BranchStack = make([]BranchEntry, nr)
+		for i := 0; i < len(sr.BranchStack); i++ {
+			var from, to, tmp uint64
+			f.uint64(&from)
+			f.uint64(&to)
+			f.uint64(&tmp)
+			sr.BranchStack[i] = BranchEntry{
+				From:             from,
+				To:               to,
+				Mispredicted:     tmp&(1<<0) != 0,
+				Predicted:        tmp&(1<<1) != 0,
+				InTransaction:    tmp&(1<<2) != 0,
+				TransactionAbort: tmp&(1<<3) != 0,
+				Cycles:           uint16((tmp << 44) >> 48),
+				BranchType:       uint8((tmp << 40) >> 44),
+			}
+		}
+	}
+	// TODO(acln): non-ABI bits
+}
+
+type BranchEntry struct {
+	From             uint64
+	To               uint64
+	Mispredicted     bool
+	Predicted        bool
+	InTransaction    bool
+	TransactionAbort bool
+	Cycles           uint16
+	BranchType       uint8
 }
 
 type Mmap2Record struct {
