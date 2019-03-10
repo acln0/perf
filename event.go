@@ -75,7 +75,7 @@ type Event struct {
 	group []*Event
 
 	// attr is the set of attributes the Event was configured with.
-	attr EventAttr
+	attr Attr
 
 	// ring is the (entire) memory mapped ring buffer.
 	ring []byte
@@ -129,7 +129,7 @@ const numRingPages = 128
 // associated with the specified group Event. If group is non-nil, and
 // FlagNoGroup | FlagFDOutput are not set, the attr.Options.Disabled setting
 // is ignored: the group leader controls when the entire group is enabled.
-func Open(attr EventAttr, pid, cpu int, group *Event, flags Flag) (*Event, error) {
+func Open(attr Attr, pid, cpu int, group *Event, flags Flag) (*Event, error) {
 	groupfd := -1
 	if group != nil {
 		if err := group.ok(); err != nil {
@@ -190,6 +190,43 @@ func (ev *Event) ok() error {
 	default: // eventStateClosed
 		return os.ErrClosed
 	}
+}
+
+// Measure disables the event, resets it, enables it, runs f, disables it again,
+// then reads the Count associated with the event.
+func (ev *Event) Measure(f func()) (Count, error) {
+	if err := ev.Disable(); err != nil {
+		return Count{}, err
+	}
+	if err := ev.Reset(); err != nil {
+		return Count{}, err
+	}
+	if err := ev.Enable(); err != nil {
+		return Count{}, err
+	}
+	f()
+	if err := ev.Disable(); err != nil {
+		return Count{}, err
+	}
+	return ev.ReadCount()
+}
+
+// MeasureGroup is like Measure, but for event groups.
+func (ev *Event) MeasureGroup(f func()) (GroupCount, error) {
+	if err := ev.Disable(); err != nil {
+		return GroupCount{}, err
+	}
+	if err := ev.Reset(); err != nil {
+		return GroupCount{}, err
+	}
+	if err := ev.Enable(); err != nil {
+		return GroupCount{}, err
+	}
+	f()
+	if err := ev.Disable(); err != nil {
+		return GroupCount{}, err
+	}
+	return ev.ReadGroupCount()
 }
 
 // Enable enables the event.
@@ -292,7 +329,7 @@ func (ev *Event) QueryBPF(max uint32) ([]uint32, error) {
 }
 
 // ModifyAttributes modifies the attributes of an event.
-func (ev *Event) ModifyAttributes(attr EventAttr) error {
+func (ev *Event) ModifyAttributes(attr Attr) error {
 	if err := ev.ok(); err != nil {
 		return err
 	}
@@ -396,8 +433,8 @@ func (ev *Event) Close() error {
 	return cerr
 }
 
-// EventAttr configures a perf event.
-type EventAttr struct {
+// Attr configures a perf event.
+type Attr struct {
 	// Type is the major type of the event.
 	Type EventType
 
@@ -472,43 +509,43 @@ type EventAttr struct {
 	SampleMaxStack uint16
 }
 
-func (attr EventAttr) sysAttr() *unix.PerfEventAttr {
+func (a Attr) sysAttr() *unix.PerfEventAttr {
 	return &unix.PerfEventAttr{
-		Type:               uint32(attr.Type),
+		Type:               uint32(a.Type),
 		Size:               uint32(unsafe.Sizeof(unix.PerfEventAttr{})),
-		Config:             attr.Config,
-		Sample:             attr.Sample,
-		Sample_type:        attr.SampleFormat.marshal(),
-		Read_format:        attr.CountFormat.marshal(),
-		Bits:               attr.Options.marshal(),
-		Wakeup:             attr.Wakeup,
-		Bp_type:            attr.BreakpointType,
-		Ext1:               attr.Config1,
-		Ext2:               attr.Config2,
-		Branch_sample_type: uint64(attr.BranchSampleFormat),
-		Sample_regs_user:   attr.SampleRegsUser,
-		Sample_stack_user:  attr.SampleStackUser,
-		Clockid:            attr.ClockID,
-		Sample_regs_intr:   attr.SampleRegsInt,
-		Aux_watermark:      attr.AuxWatermark,
-		Sample_max_stack:   attr.SampleMaxStack,
+		Config:             a.Config,
+		Sample:             a.Sample,
+		Sample_type:        a.SampleFormat.marshal(),
+		Read_format:        a.CountFormat.marshal(),
+		Bits:               a.Options.marshal(),
+		Wakeup:             a.Wakeup,
+		Bp_type:            a.BreakpointType,
+		Ext1:               a.Config1,
+		Ext2:               a.Config2,
+		Branch_sample_type: uint64(a.BranchSampleFormat),
+		Sample_regs_user:   a.SampleRegsUser,
+		Sample_stack_user:  a.SampleStackUser,
+		Clockid:            a.ClockID,
+		Sample_regs_intr:   a.SampleRegsInt,
+		Aux_watermark:      a.AuxWatermark,
+		Sample_max_stack:   a.SampleMaxStack,
 	}
 }
 
 // SetSamplePeriod configures the sampling period for the event.
 //
 // It sets attr.Sample to p and attr.Options.Freq to false.
-func (attr *EventAttr) SetSamplePeriod(p uint64) {
-	attr.Sample = p
-	attr.Options.Freq = false
+func (a *Attr) SetSamplePeriod(p uint64) {
+	a.Sample = p
+	a.Options.Freq = false
 }
 
 // SetSampleFreq configures the sampling frequency for the event.
 //
 // It sets attr.Sample to f and enables attr.Options.Freq.
-func (attr *EventAttr) SetSampleFreq(f uint64) {
-	attr.Sample = f
-	attr.Options.Freq = true
+func (a *Attr) SetSampleFreq(f uint64) {
+	a.Sample = f
+	a.Options.Freq = true
 }
 
 // EventType is the overall type of a performance event.
@@ -563,13 +600,13 @@ func (hwc HardwareCounter) Label() string {
 	panic("not implemented")
 }
 
-func (hwc HardwareCounter) EventAttr() EventAttr {
-	return EventAttr{Type: HardwareEvent, Config: uint64(hwc)}
+func (hwc HardwareCounter) MarshalAttr() Attr {
+	return Attr{Type: HardwareEvent, Config: uint64(hwc)}
 }
 
 // AllHardwareCounters returns a slice of all known hardware counters.
-func AllHardwareCounters() []Counter {
-	return []Counter{
+func AllHardwareCounters() []TODOInterfaceName {
+	return []TODOInterfaceName{
 		CPUCycles,
 		Instructions,
 		CacheReferences,
@@ -605,13 +642,13 @@ func (swc SoftwareCounter) Label() string {
 	panic("not implemented")
 }
 
-func (swc SoftwareCounter) EventAttr() EventAttr {
-	return EventAttr{Type: SoftwareEvent, Config: uint64(swc)}
+func (swc SoftwareCounter) MarshalAttr() Attr {
+	return Attr{Type: SoftwareEvent, Config: uint64(swc)}
 }
 
 // AllSoftwareCounters returns a slice of all known software counters.
-func AllSoftwareCounters() []Counter {
-	return []Counter{
+func AllSoftwareCounters() []TODOInterfaceName {
+	return []TODOInterfaceName{
 		CPUClock,
 		TaskClock,
 		PageFaults,
@@ -686,15 +723,15 @@ func (hwcc HardwareCacheCounter) Label() string {
 	panic("not implemented")
 }
 
-func (hwcc HardwareCacheCounter) EventAttr() EventAttr {
+func (hwcc HardwareCacheCounter) MarshalAttr() Attr {
 	config := uint64(hwcc.Cache) | uint64(hwcc.Op<<8) | uint64(hwcc.Result<<16)
-	return EventAttr{Type: HardwareCacheEvent, Config: config}
+	return Attr{Type: HardwareCacheEvent, Config: config}
 }
 
 // HardwareCacheCounters returns triples of cache counters, measuring the specified
 // caches, operations and results.
-func HardwareCacheCounters(caches []Cache, ops []CacheOp, results []CacheOpResult) []Counter {
-	counters := make([]Counter, 0, len(caches)*len(ops)*len(results))
+func HardwareCacheCounters(caches []Cache, ops []CacheOp, results []CacheOpResult) []TODOInterfaceName {
+	counters := make([]TODOInterfaceName, 0, len(caches)*len(ops)*len(results))
 	for _, cache := range caches {
 		for _, op := range ops {
 			for _, result := range results {
@@ -712,26 +749,26 @@ func HardwareCacheCounters(caches []Cache, ops []CacheOp, results []CacheOpResul
 
 // NewTracepoint probes /sys/kernel/debug/tracing/events/<category>/<event>/id
 // for the value of the trace point associated with the specified category and
-// event, and returns an *EventAttr with the Type and Config fields set
+// event, and returns an *MarshalAttr with the Type and Config fields set
 // to the appropriate values.
-func NewTracepoint(category string, event string) (EventAttr, error) {
+func NewTracepoint(category string, event string) (Attr, error) {
 	f := filepath.Join("/sys/kernel/debug/tracing/events", category, event, "id")
 	content, err := ioutil.ReadFile(f)
 	if err != nil {
-		return EventAttr{}, err
+		return Attr{}, err
 	}
 	nr := strings.TrimSpace(string(content)) // remove trailing newline
 	config, err := strconv.ParseUint(nr, 10, 64)
 	if err != nil {
-		return EventAttr{}, err
+		return Attr{}, err
 	}
-	return EventAttr{
+	return Attr{
 		Type:   TracepointEvent,
 		Config: config,
 	}, nil
 }
 
-// NewBreakpoint returns an EventAttr configured to record breakpoint events.
+// NewBreakpoint returns an MarshalAttr configured to record breakpoint events.
 //
 // typ is the type of the breakpoint.
 //
@@ -742,9 +779,9 @@ func NewTracepoint(category string, event string) (EventAttr, error) {
 // length is the length of the breakpoint being measured.
 //
 // Breakpoint sets the Type, BreakpointType, Config1 and Config2 fields on
-// the returned EventAttr.
-func NewBreakpoint(typ BreakpointType, addr uint64, length BreakpointLength) EventAttr {
-	return EventAttr{
+// the returned MarshalAttr.
+func NewBreakpoint(typ BreakpointType, addr uint64, length BreakpointLength) Attr {
+	return Attr{
 		Type:           BreakpointEvent,
 		BreakpointType: uint32(typ),
 		Config1:        addr,
@@ -760,7 +797,7 @@ type BreakpointLength uint64
 
 // NewExecutionBreakpoint returns an Event configured to record an execution
 // breakpoint at the specified address.
-func NewExecutionBreakpoint(addr uint64) *EventAttr {
+func NewExecutionBreakpoint(addr uint64) *Attr {
 	panic("not implemented")
 }
 

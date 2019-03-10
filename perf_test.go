@@ -16,7 +16,7 @@ import (
 )
 
 func TestInstructionCount(t *testing.T) {
-	attr := Instructions.EventAttr()
+	attr := Instructions.MarshalAttr()
 	attr.CountFormat = CountFormat{
 		TotalTimeEnabled: true,
 		TotalTimeRunning: true,
@@ -35,32 +35,21 @@ func TestInstructionCount(t *testing.T) {
 	}
 	defer ev.Close()
 
-	if err := ev.Reset(); err != nil {
-		t.Fatalf("Reset: %v", err)
-	}
-	if err := ev.Enable(); err != nil {
-		t.Fatalf("Enable: %v", err)
-	}
-
-	testasm.SumN(50000)
-
-	if err := ev.Disable(); err != nil {
-		t.Fatalf("Disable: %v", err)
-	}
-
-	count, err := ev.ReadCount()
+	count, err := ev.Measure(func() {
+		testasm.SumN(50000)
+	})
 	if err != nil {
-		t.Fatalf("ReadCount: %v", err)
+		t.Fatalf("Measure: %v", err)
 	}
 
 	t.Logf("got %+v\n", count)
 }
 
-func TestGroup(t *testing.T) {
+func TestManualGroupWire(t *testing.T) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	insns := Instructions.EventAttr()
+	insns := Instructions.MarshalAttr()
 	insns.CountFormat = CountFormat{
 		TotalTimeEnabled: true,
 		TotalTimeRunning: true,
@@ -71,7 +60,7 @@ func TestGroup(t *testing.T) {
 	insns.Options.ExcludeKernel = true
 	insns.Options.ExcludeHypervisor = true
 
-	cycles := CPUCycles.EventAttr()
+	cycles := CPUCycles.MarshalAttr()
 	cycles.Options.ExcludeKernel = true
 	cycles.Options.ExcludeHypervisor = true
 
@@ -87,19 +76,9 @@ func TestGroup(t *testing.T) {
 	}
 	defer cev.Close()
 
-	if err := iev.Reset(); err != nil {
-		t.Fatalf("Reset: %v", err)
-	}
-	if err := iev.Enable(); err != nil {
-		t.Fatalf("Enable: %v", err)
-	}
-
-	testasm.SumN(50000)
-
-	if err := iev.Disable(); err != nil {
-		t.Fatalf("Disable: %v", err)
-	}
-	counts, err := iev.ReadGroupCount()
+	counts, err := iev.MeasureGroup(func() {
+		testasm.SumN(50000)
+	})
 	if err != nil {
 		t.Fatalf("ReadGroupCount: %v", err)
 	}
@@ -161,17 +140,12 @@ func TestTracepoint(t *testing.T) {
 		defer close(errc)
 
 		for i := 0; i < N; i++ {
-			var raw RawRecord
-			err := ev.ReadRawRecord(ctx, &raw)
+			rec, err := ev.ReadRecord(ctx)
 			if err != nil {
 				errc <- err
 				return
 			}
-			if raw.Header.Type == 9 {
-				var sr SampleRecord
-				sr.DecodeFrom(&raw, ev)
-				t.Logf("got sample record %+v", sr)
-			}
+			t.Logf("got record %+v", rec)
 		}
 	}()
 

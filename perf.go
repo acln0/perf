@@ -10,36 +10,6 @@ import (
 	"unsafe"
 )
 
-// An EventGroup configures a group of related events.
-// The zero value of EventGroup is an empty group.
-type EventGroup struct {
-	// ...
-}
-
-func (g *EventGroup) Open(pid int, cpu int, flags Flag) (*Event, error) {
-	panic("not implemented")
-}
-
-// AddCounter adds a set of counters to the event group.
-func (g *EventGroup) AddCounter(counters ...Counter) {
-	for _, counter := range counters {
-		g.AddEvent(counter.Label(), counter.EventAttr())
-	}
-	// maybe we need to set some flags here, investigate
-	panic("not implemented")
-}
-
-// AddEvent adds the specified event to the group. The label need not be unique
-// and may be empty.
-func (g *EventGroup) AddEvent(label string, attr EventAttr) {
-	panic("not implemented")
-}
-
-type Counter interface {
-	Label() string
-	EventAttr() EventAttr
-}
-
 // fields is a collection of 32-bit or 64-bit fields.
 type fields []byte
 
