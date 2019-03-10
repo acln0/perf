@@ -6,13 +6,110 @@ package perf_test
 
 import (
 	"fmt"
+	"os"
 	"runtime"
 	"testing"
 	"time"
 
 	"acln.ro/perf"
 	"acln.ro/perf/internal/testasm"
+
+	"golang.org/x/sys/unix"
 )
+
+type tracepointTest struct {
+	category string
+	event    string
+	trigger  func() error
+}
+
+func (tt tracepointTest) run(t *testing.T) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	attr, err := perf.NewTracepoint(tt.category, tt.event)
+	if err != nil {
+		t.Fatalf("NewTracepoint: %v", err)
+	}
+
+	ev, err := perf.Open(attr, perf.CallingThread, perf.AnyCPU, nil, 0)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer ev.Close()
+
+	const hits = 5 // TODO(acln): don't hard code, perhaps
+
+	count, err := ev.Measure(func() {
+		for i := 0; i < hits; i++ {
+			if err := tt.trigger(); err != nil {
+				t.Fatalf("trigger: %v", err)
+			}
+		}
+	})
+	if err != nil {
+		t.Fatalf("Measure: %v", err)
+	}
+	if count.Value != hits {
+		t.Fatalf("got %d %s hits, want %d", count.Value, tt.String(), hits)
+	}
+}
+
+func (tt tracepointTest) String() string {
+	return tt.category + ":" + tt.event
+}
+
+func TestTracepoint(t *testing.T) {
+	tests := []tracepointTest{
+		{
+			category: "syscalls",
+			event:    "sys_enter_getpid",
+			trigger:  getpidTrigger,
+		},
+		{
+			category: "syscalls",
+			event:    "sys_enter_read",
+			trigger:  readTrigger,
+		},
+		{
+			category: "syscalls",
+			event:    "sys_enter_write",
+			trigger:  writeTrigger,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.String(), tt.run)
+	}
+
+}
+
+func getpidTrigger() error {
+	unix.Getpid()
+	return nil
+}
+
+func readTrigger() error {
+	zero, err := os.Open("/dev/zero")
+	if err != nil {
+		return err
+	}
+	buf := make([]byte, 8)
+	if _, err := zero.Read(buf); err != nil {
+		return err
+	}
+	return zero.Close()
+}
+
+func writeTrigger() error {
+	null, err := os.OpenFile("/dev/null", os.O_WRONLY, 0200)
+	if err != nil {
+		return err
+	}
+	if _, err := null.Write([]byte("big data")); err != nil {
+		return err
+	}
+	return null.Close()
+}
 
 func TestSumIPC(t *testing.T) {
 	runtime.LockOSThread()
