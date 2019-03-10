@@ -27,9 +27,10 @@ func (tt singleTracepointTest) run(t *testing.T) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	attr, err := perf.NewTracepoint(tt.category, tt.event)
-	if err != nil {
-		t.Fatalf("NewTracepoint: %v", err)
+	tp := perf.Tracepoint(tt.category, tt.event)
+	attr := new(perf.Attr)
+	if err := tp.Configure(attr); err != nil {
+		t.Fatalf("Configure: %v", err)
 	}
 
 	ev, err := perf.Open(attr, perf.CallingThread, perf.AnyCPU, nil, 0)
@@ -115,7 +116,8 @@ func TestSumIPC(t *testing.T) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	insns := perf.Instructions.MarshalAttr()
+	insns := new(perf.Attr)
+	perf.Instructions.Configure(insns)
 	insns.CountFormat = perf.CountFormat{
 		TotalTimeEnabled: true,
 		TotalTimeRunning: true,
@@ -126,7 +128,8 @@ func TestSumIPC(t *testing.T) {
 		Disabled: true,
 	}
 
-	cycles := perf.CPUCycles.MarshalAttr()
+	cycles := new(perf.Attr)
+	perf.CPUCycles.Configure(cycles)
 
 	iev, err := perf.Open(insns, perf.CallingThread, perf.AnyCPU, nil, 0)
 	if err != nil {
@@ -181,24 +184,25 @@ type sumIPC struct {
 }
 
 func (i sumIPC) String() string {
-	return fmt.Sprintf("N = %11d | instructions = %11d | cycles = %11d | ipc = %6.3f | %v", i.N, i.instructions, i.cycles, i.ipc, i.running)
+	return fmt.Sprintf("N = %11d | instructions = %11d | ipc = %6.3f | %v", i.N, i.instructions, i.ipc, i.running)
 }
 
 func TestSumOverhead(t *testing.T) {
-	a := perf.Instructions.MarshalAttr()
-	a.CountFormat = perf.CountFormat{
+	attr := new(perf.Attr)
+	perf.Instructions.Configure(attr)
+	attr.CountFormat = perf.CountFormat{
 		TotalTimeEnabled: true,
 		TotalTimeRunning: true,
 		ID:               true,
 	}
-	a.Options = perf.Options{
+	attr.Options = perf.Options{
 		Disabled: true,
 	}
 
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	ev, err := perf.Open(a, perf.CallingThread, perf.AnyCPU, nil, 0)
+	ev, err := perf.Open(attr, perf.CallingThread, perf.AnyCPU, nil, 0)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -247,5 +251,5 @@ type sumOverhead struct {
 }
 
 func (o sumOverhead) String() string {
-	return fmt.Sprintf("N = %11d | instructions = %11d | ideal = %11d | overhead = %10.6f | %v", o.N, o.got, o.ideal, o.overhead, o.running)
+	return fmt.Sprintf("N = %11d | instructions = %11d | overhead = %10.6f | %v", o.N, o.got, o.overhead, o.running)
 }

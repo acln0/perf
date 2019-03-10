@@ -1,0 +1,37 @@
+// Copyright 2019 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package perf_test
+
+import (
+	"runtime"
+	"testing"
+
+	"acln.ro/perf"
+	"acln.ro/perf/internal/testasm"
+)
+
+func TestGroup(t *testing.T) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	g := perf.Group{
+		CountFormat: perf.CountFormat{
+			TotalTimeRunning: true,
+			ID:               true,
+		},
+	}
+	g.Add(perf.Instructions, perf.CPUCycles, perf.BranchInstructions, perf.BranchMisses)
+	ev, err := g.Open(perf.CallingThread, perf.AnyCPU)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	counts, err := ev.MeasureGroup(func() {
+		testasm.SumN(50000)
+	})
+	if err != nil {
+		t.Fatalf("MeasureGroup: %v", err)
+	}
+	t.Logf("%+v\n", counts)
+}

@@ -4,25 +4,85 @@
 
 package perf
 
-// A Group is a group of perf counters.
+import (
+	"errors"
+	"fmt"
+)
+
+// Group configures a group of events.
 type Group struct {
-	// ...
+	// CountFormat configures the format of counts read from the event
+	// leader. The Group option is set automatically.
+	CountFormat CountFormat
+
+	// Options configures options for all events in the group.
+	Options Options
+
+	err   error // sticky configuration error
+	attrs []*Attr
 }
 
-func NewGroup(counters ...TODOInterfaceName) *Group {
-	g := new(Group)
-	g.Add(counters...)
-	return g
+// Add adds events to the group, as configured by cfgs.
+//
+// For each Configurator, a new *Attr is created, the group-specific settings
+// are applied, then Configure is called on the *Attr to produce the final
+// event attributes.
+func (g *Group) Add(cfgs ...Configurator) {
+	for _, cfg := range cfgs {
+		g.add(cfg)
+	}
 }
 
+func (g *Group) add(cfg Configurator) {
+	if g.err != nil {
+		return
+	}
+	attr := new(Attr)
+	attr.Options = g.Options
+	err := cfg.Configure(attr)
+	if err != nil {
+		g.err = err
+		return
+	}
+	g.attrs = append(g.attrs, attr)
+}
+
+// Open opens all the events in the group, and returns their leader.
 func (g *Group) Open(pid int, cpu int) (*Event, error) {
-	panic("not implemented")
+	if len(g.attrs) == 0 {
+		return nil, errors.New("perf: empty event group")
+	}
+	if g.err != nil {
+		return nil, fmt.Errorf("perf: configuration error: %v", g.err)
+	}
+	leaderattr := g.attrs[0]
+	leaderattr.CountFormat = g.CountFormat
+	leaderattr.CountFormat.Group = true
+	leader, err := Open(leaderattr, pid, cpu, nil, 0)
+	if err != nil {
+		return nil, fmt.Errorf("perf: failed to open event leader: %v", err)
+	}
+	if len(g.attrs) < 2 {
+		return leader, nil
+	}
+	// TODO(acln): figure out how to re-route samples to leader
+	for idx, attr := range g.attrs[1:] {
+		ev, err := Open(attr, pid, cpu, leader, 0)
+		if err != nil {
+			leader.Close()
+			return nil, fmt.Errorf("perf: failed to open child event #%d: %v", idx, err)
+		}
+		leader.owned = append(leader.owned, ev)
+	}
+	return leader, nil
 }
 
-// Add adds counters to the group.
-func (g *Group) Add(counters ...TODOInterfaceName) {
+// A Configurator configures event attributes. Implementations should only
+// set the fields they need. See (*Group).Add for more details.
+type Configurator interface {
+	Configure(attr *Attr) error
 }
 
-type TODOInterfaceName interface {
-	MarshalAttr() *Attr
-}
+type configuratorFunc func(attr *Attr) error
+
+func (cf configuratorFunc) Configure(attr *Attr) error { return cf(attr) }

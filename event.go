@@ -74,6 +74,10 @@ type Event struct {
 	// event group leader.
 	group []*Event
 
+	// owned contains other events in the event group, which the caller
+	// has no access to. The Event owns them all, Close closes them all.
+	owned []*Event
+
 	// attr is the set of attributes the Event was configured with.
 	// It is a clone of the original.
 	attr *Attr
@@ -410,19 +414,15 @@ func (ev *Event) ReadGroupCount() (GroupCount, error) {
 // Close closes the event. Close must not be called concurrently with any
 // other methods on the Event.
 func (ev *Event) Close() error {
+	for _, ev := range ev.owned {
+		ev.Close()
+	}
 	ev.state = eventStateClosed
 	close(ev.pollreq)
 	<-ev.pollresp
-	muerr := unix.Munmap(ev.ring)
-	evfderr := unix.Close(ev.evfd)
-	cerr := unix.Close(ev.fd)
-	if muerr != nil {
-		return muerr
-	}
-	if evfderr != nil {
-		return evfderr
-	}
-	return cerr
+	unix.Munmap(ev.ring)
+	unix.Close(ev.evfd)
+	return unix.Close(ev.fd)
 }
 
 // Attr configures a perf event.
@@ -586,19 +586,19 @@ const (
 	RefCPUCycles          HardwareCounter = unix.PERF_COUNT_HW_REF_CPU_CYCLES
 )
 
-func (hwc HardwareCounter) Label() string {
-	// TODO(acln): figure out how to get at these:
-	// https://github.com/golang/go/issues/21295#issuecomment-335519282
-	panic("not implemented")
-}
+// TODO(acln): figure out how to get at these:
+// https://github.com/golang/go/issues/21295#issuecomment-335519282
 
-func (hwc HardwareCounter) MarshalAttr() *Attr {
-	return &Attr{Type: HardwareEvent, Config: uint64(hwc)}
+// Configure configures attr to measure hwc. It sets attr.Type and attr.Config.
+func (hwc HardwareCounter) Configure(attr *Attr) error {
+	attr.Type = HardwareEvent
+	attr.Config = uint64(hwc)
+	return nil
 }
 
 // AllHardwareCounters returns a slice of all known hardware counters.
-func AllHardwareCounters() []TODOInterfaceName {
-	return []TODOInterfaceName{
+func AllHardwareCounters() []Configurator {
+	return []Configurator{
 		CPUCycles,
 		Instructions,
 		CacheReferences,
@@ -630,17 +630,16 @@ const (
 	BPFOutput       SoftwareCounter = unix.PERF_COUNT_SW_BPF_OUTPUT
 )
 
-func (swc SoftwareCounter) Label() string {
-	panic("not implemented")
-}
-
-func (swc SoftwareCounter) MarshalAttr() *Attr {
-	return &Attr{Type: SoftwareEvent, Config: uint64(swc)}
+// Configure configures attr to measure swc. It sets attr.Type and attr.Config.
+func (swc SoftwareCounter) Configure(attr *Attr) error {
+	attr.Type = SoftwareEvent
+	attr.Config = uint64(swc)
+	return nil
 }
 
 // AllSoftwareCounters returns a slice of all known software counters.
-func AllSoftwareCounters() []TODOInterfaceName {
-	return []TODOInterfaceName{
+func AllSoftwareCounters() []Configurator {
+	return []Configurator{
 		CPUClock,
 		TaskClock,
 		PageFaults,
@@ -711,19 +710,17 @@ type HardwareCacheCounter struct {
 	Result CacheOpResult
 }
 
-func (hwcc HardwareCacheCounter) Label() string {
-	panic("not implemented")
-}
-
-func (hwcc HardwareCacheCounter) MarshalAttr() *Attr {
-	config := uint64(hwcc.Cache) | uint64(hwcc.Op<<8) | uint64(hwcc.Result<<16)
-	return &Attr{Type: HardwareCacheEvent, Config: config}
+// Configure configures attr to measure hwcc. It sets attr.Type and attr.Config.
+func (hwcc HardwareCacheCounter) Configure(attr *Attr) error {
+	attr.Type = HardwareCacheEvent
+	attr.Config = uint64(hwcc.Cache) | uint64(hwcc.Op<<8) | uint64(hwcc.Result<<16)
+	return nil
 }
 
 // HardwareCacheCounters returns cache counters which measure the cartesian
 // product of the specified caches, operations and results.
-func HardwareCacheCounters(caches []Cache, ops []CacheOp, results []CacheOpResult) []TODOInterfaceName {
-	counters := make([]TODOInterfaceName, 0, len(caches)*len(ops)*len(results))
+func HardwareCacheCounters(caches []Cache, ops []CacheOp, results []CacheOpResult) []Configurator {
+	counters := make([]Configurator, 0, len(caches)*len(ops)*len(results))
 	for _, cache := range caches {
 		for _, op := range ops {
 			for _, result := range results {
@@ -739,25 +736,33 @@ func HardwareCacheCounters(caches []Cache, ops []CacheOp, results []CacheOpResul
 	return counters
 }
 
-// NewTracepoint probes /sys/kernel/debug/tracing/events/<category>/<event>/id
-// for the value of the trace point associated with the specified category
-// and event, and returns an *Attr with the Type and Config fields set to
-// the appropriate values.
-func NewTracepoint(category string, event string) (*Attr, error) {
+// Tracepoint returns a Configurator for the specified category and event.
+// The returned Configurator sets attr.Type and attr.Config.
+func Tracepoint(category, event string) Configurator {
+	return configuratorFunc(func(attr *Attr) error {
+		cfg, err := LookupTracepointConfig(category, event)
+		if err != nil {
+			return err
+		}
+		attr.Type = TracepointEvent
+		attr.Config = cfg
+		return nil
+	})
+}
+
+// LookupTracepointConfig probes /sys/kernel/debug/tracing/events/<category>/<event>/id
+// for the Attr.Config value associated with the specified category and event.
+func LookupTracepointConfig(category, event string) (uint64, error) {
 	f := filepath.Join("/sys/kernel/debug/tracing/events", category, event, "id")
 	content, err := ioutil.ReadFile(f)
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
 	nr := strings.TrimSpace(string(content)) // remove trailing newline
-	config, err := strconv.ParseUint(nr, 10, 64)
-	if err != nil {
-		return nil, err
-	}
-	return &Attr{Type: TracepointEvent, Config: config}, nil
+	return strconv.ParseUint(nr, 10, 64)
 }
 
-// NewBreakpoint returns an *Attr configured to record breakpoint events.
+// Breakpoint returns a Configurator for a breakpoint event.
 //
 // typ is the type of the breakpoint.
 //
@@ -767,15 +772,15 @@ func NewTracepoint(category string, event string) (*Attr, error) {
 //
 // length is the length of the breakpoint being measured.
 //
-// Breakpoint sets the Type, BreakpointType, Config1 and Config2 fields on
-// the returned Attr.
-func NewBreakpoint(typ BreakpointType, addr uint64, length BreakpointLength) *Attr {
-	return &Attr{
-		Type:           BreakpointEvent,
-		BreakpointType: uint32(typ),
-		Config1:        addr,
-		Config2:        uint64(length),
-	}
+// The returned Configurator sets the attr.Type, attr.BreakpointType, attr.Config1 and attr.Config2 fields.
+func Breakpoint(typ BreakpointType, addr uint64, length BreakpointLength) Configurator {
+	return configuratorFunc(func(attr *Attr) error {
+		attr.Type = BreakpointEvent
+		attr.BreakpointType = uint32(typ)
+		attr.Config1 = addr
+		attr.Config2 = uint64(length)
+		return nil
+	})
 }
 
 // BreakpointType is the type of a breakpoint.
@@ -816,10 +821,10 @@ func ExecutionBreakpointLength() BreakpointLength {
 	return BreakpointLength(unsafe.Sizeof(x))
 }
 
-// NewExecutionBreakpoint returns an Event configured to record an execution
-// breakpoint at the specified address.
-func NewExecutionBreakpoint(addr uint64) *Attr {
-	return NewBreakpoint(BreakpointTypeX, addr, ExecutionBreakpointLength())
+// ExecutionBreakpoint returns a Configurator for an execution breakpoint
+// at the specified address.
+func ExecutionBreakpoint(addr uint64) Configurator {
+	return Breakpoint(BreakpointTypeX, addr, ExecutionBreakpointLength())
 }
 
 // CountFormat configures the format of Count or GroupCount measurements.
