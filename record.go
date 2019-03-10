@@ -1007,6 +1007,9 @@ func (sr *SwitchCPUWideRecord) Preempted() bool {
 	return sr.RecordHeader.Misc&switchOutPreemptBit != 0
 }
 
+// NamespacesRecord (PERF_RECORD_NAMESPACES) is not documented in my man page.
+//
+// TODO(acln): ^
 type NamespacesRecord struct {
 	RecordHeader
 	Pid        uint32
@@ -1038,7 +1041,7 @@ type DataSource uint64
 
 // MemOp returns the recorded memory operation.
 func (ds DataSource) MemOp() MemOp {
-	return MemOp(ds)
+	return MemOp(ds >> memOpShift)
 }
 
 // MemLevel returns the recorded memory level.
