@@ -439,9 +439,9 @@ type Attr struct {
 	// interpreted as "sample period".
 	Sample uint64
 
-	// SampleFormat configures the format for overflow packets read from
+	// RecordFormat configures the format for overflow packets read from
 	// the ring buffer associated with the event.
-	SampleFormat SampleFormat
+	RecordFormat RecordFormat
 
 	// CountFormat specifies the format of counts read from the
 	// Event using ReadCount or ReadGroupCount. See the CountFormat
@@ -507,14 +507,14 @@ func (a Attr) sysAttr() *unix.PerfEventAttr {
 		Size:               uint32(unsafe.Sizeof(unix.PerfEventAttr{})),
 		Config:             a.Config,
 		Sample:             a.Sample,
-		Sample_type:        a.SampleFormat.marshal(),
+		Sample_type:        a.RecordFormat.marshal(),
 		Read_format:        a.CountFormat.marshal(),
 		Bits:               a.Options.marshal(),
 		Wakeup:             a.Wakeup,
 		Bp_type:            a.BreakpointType,
 		Ext1:               a.Config1,
 		Ext2:               a.Config2,
-		Branch_sample_type: uint64(a.BranchSampleFormat),
+		Branch_sample_type: a.BranchSampleFormat.marshal(),
 		Sample_regs_user:   a.SampleRegsUser,
 		Sample_stack_user:  a.SampleStackUser,
 		Clockid:            a.ClockID,
@@ -878,7 +878,7 @@ type Options struct {
 	Watermark              bool // wake up at watermark
 	PreciseIP              Skid // skid constraint
 	MmapData               bool // non-exec mmap data
-	SampleIDAll            bool // include all events in SampleFormat
+	RecordIDAll            bool // include all events in RecordFormat
 	ExcludeHost            bool // don't count in host
 	ExcludeGuest           bool // don't count in guest
 	ExcludeCallchainKernel bool // exclude kernel callchains
@@ -887,7 +887,7 @@ type Options struct {
 	CommExec               bool // flag comm events that are due to an exec
 	UseClockID             bool // use ClockID for time fields
 	ContextSwitch          bool // context switch data
-	WriteBackward          bool // TODO(acln): support this at all?
+	writeBackward          bool // not supported
 	Namespaces             bool // include namespaces data
 }
 
@@ -910,7 +910,7 @@ func (opt Options) marshal() uint64 {
 		opt.Watermark,
 		false, false, // 2 bits for skid constraint, TODO
 		opt.MmapData,
-		opt.SampleIDAll,
+		opt.RecordIDAll,
 		opt.ExcludeHost,
 		opt.ExcludeGuest,
 		opt.ExcludeCallchainKernel,
@@ -919,7 +919,7 @@ func (opt Options) marshal() uint64 {
 		opt.CommExec,
 		opt.UseClockID,
 		opt.ContextSwitch,
-		opt.WriteBackward,
+		opt.writeBackward,
 		opt.Namespaces,
 	}
 	return marshalBitwiseUint64(fields)
@@ -936,26 +936,45 @@ const (
 	MustHaveZeroSkid     Skid = 3
 )
 
-// BranchSampleFormat ...
-type BranchSampleFormat uint32
+// BranchSampleFormat specifies what branches to include in a branch record.
+type BranchSampleFormat struct {
+	Privilege BranchSamplePrivilege
+	Sample    BranchSample
+}
 
-// Branch sample types.
+func (b BranchSampleFormat) marshal() uint64 {
+	return uint64(b.Privilege) | uint64(b.Sample)
+}
+
+// BranchSamplePrivilege speifies a branch sample privilege level. If a
+// level is not set explicitly, the kernel will use the event's privilege
+// level. Event and branch privilege levels do not have to match.
+type BranchSamplePrivilege uint32
+
+// Branch sample privilege values. Values should be |-ed together.
 const (
-	BranchSampleUser             BranchSampleFormat = unix.PERF_SAMPLE_BRANCH_USER
-	BranchSampleKernel           BranchSampleFormat = unix.PERF_SAMPLE_BRANCH_KERNEL
-	BranchSampleHypervisor       BranchSampleFormat = unix.PERF_SAMPLE_BRANCH_HV
-	BranchSampleAny              BranchSampleFormat = unix.PERF_SAMPLE_BRANCH_ANY
-	BranchSampleAnyCall          BranchSampleFormat = unix.PERF_SAMPLE_BRANCH_ANY_CALL
-	BranchSampleAnyReturn        BranchSampleFormat = unix.PERF_SAMPLE_BRANCH_ANY_RETURN
-	BranchSampleIndirectCall     BranchSampleFormat = unix.PERF_SAMPLE_BRANCH_IND_CALL
-	BranchSampleAbortTransaction BranchSampleFormat = unix.PERF_SAMPLE_BRANCH_ABORT_TX
-	BranchSampleInTransaction    BranchSampleFormat = unix.PERF_SAMPLE_BRANCH_IN_TX
-	BranchSampleNoTransaction    BranchSampleFormat = unix.PERF_SAMPLE_BRANCH_NO_TX
-	BranchSampleCond             BranchSampleFormat = unix.PERF_SAMPLE_BRANCH_COND
-	BranchSampleCallStack        BranchSampleFormat = unix.PERF_SAMPLE_BRANCH_CALL_STACK
-	BranchSampleIndirectJump     BranchSampleFormat = unix.PERF_SAMPLE_BRANCH_IND_JUMP
-	BranchSampleCall             BranchSampleFormat = unix.PERF_SAMPLE_BRANCH_CALL
-	BranchSampleNoFlags          BranchSampleFormat = unix.PERF_SAMPLE_BRANCH_NO_FLAGS
-	BranchSampleNoCycles         BranchSampleFormat = unix.PERF_SAMPLE_BRANCH_NO_CYCLES
-	BranchSampleSave             BranchSampleFormat = unix.PERF_SAMPLE_BRANCH_TYPE_SAVE
+	BranchPrivilegeUser       BranchSamplePrivilege = unix.PERF_SAMPLE_BRANCH_USER
+	BranchPrivilegeKernel     BranchSamplePrivilege = unix.PERF_SAMPLE_BRANCH_KERNEL
+	BranchPrivilegeHypervisor BranchSamplePrivilege = unix.PERF_SAMPLE_BRANCH_HV
+)
+
+// BranchSample specifies a type of branch to sample.
+type BranchSample uint32
+
+// Branch sample bits. Values should be |-ed together.
+const (
+	BranchSampleAny              BranchSample = unix.PERF_SAMPLE_BRANCH_ANY
+	BranchSampleAnyCall          BranchSample = unix.PERF_SAMPLE_BRANCH_ANY_CALL
+	BranchSampleAnyReturn        BranchSample = unix.PERF_SAMPLE_BRANCH_ANY_RETURN
+	BranchSampleIndirectCall     BranchSample = unix.PERF_SAMPLE_BRANCH_IND_CALL
+	BranchSampleAbortTransaction BranchSample = unix.PERF_SAMPLE_BRANCH_ABORT_TX
+	BranchSampleInTransaction    BranchSample = unix.PERF_SAMPLE_BRANCH_IN_TX
+	BranchSampleNoTransaction    BranchSample = unix.PERF_SAMPLE_BRANCH_NO_TX
+	BranchSampleCond             BranchSample = unix.PERF_SAMPLE_BRANCH_COND
+	BranchSampleCallStack        BranchSample = unix.PERF_SAMPLE_BRANCH_CALL_STACK
+	BranchSampleIndirectJump     BranchSample = unix.PERF_SAMPLE_BRANCH_IND_JUMP
+	BranchSampleCall             BranchSample = unix.PERF_SAMPLE_BRANCH_CALL
+	BranchSampleNoFlags          BranchSample = unix.PERF_SAMPLE_BRANCH_NO_FLAGS
+	BranchSampleNoCycles         BranchSample = unix.PERF_SAMPLE_BRANCH_NO_CYCLES
+	BranchSampleSave             BranchSample = unix.PERF_SAMPLE_BRANCH_TYPE_SAVE
 )

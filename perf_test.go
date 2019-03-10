@@ -97,7 +97,7 @@ func TestTracepoint(t *testing.T) {
 
 	attr.Sample = 1
 	attr.Wakeup = 1
-	attr.SampleFormat = SampleFormat{
+	attr.RecordFormat = RecordFormat{
 		Identifier: true,
 		IP:         true,
 		Tid:        true,

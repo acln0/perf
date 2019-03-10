@@ -78,15 +78,15 @@ func (f *fields) string(s *string) {
 
 // id decodes a RecordID based on the SampleFormat ev was configured with.
 func (f *fields) id(id *RecordID, ev *Event) {
-	if !ev.attr.Options.SampleIDAll {
+	if !ev.attr.Options.RecordIDAll {
 		return
 	}
-	f.uint32Cond(ev.attr.SampleFormat.Tid, &id.Pid, &id.Tid)
-	f.uint64Cond(ev.attr.SampleFormat.Time, &id.Time)
-	f.uint64Cond(ev.attr.SampleFormat.ID, &id.ID)
-	f.uint64Cond(ev.attr.SampleFormat.StreamID, &id.StreamID)
-	f.uint32Cond(ev.attr.SampleFormat.CPU, &id.CPU, &id.Res)
-	f.uint64Cond(ev.attr.SampleFormat.Identifier, &id.Identifier)
+	f.uint32Cond(ev.attr.RecordFormat.Tid, &id.Pid, &id.Tid)
+	f.uint64Cond(ev.attr.RecordFormat.Time, &id.Time)
+	f.uint64Cond(ev.attr.RecordFormat.ID, &id.ID)
+	f.uint64Cond(ev.attr.RecordFormat.StreamID, &id.StreamID)
+	f.uint32Cond(ev.attr.RecordFormat.CPU, &id.CPU, &id.Res)
+	f.uint64Cond(ev.attr.RecordFormat.Identifier, &id.Identifier)
 }
 
 // count decodes a Count into c.
