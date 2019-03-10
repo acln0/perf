@@ -7,6 +7,7 @@ package perf
 import (
 	"context"
 	"fmt"
+	"math/bits"
 	"os"
 	"sync/atomic"
 	"time"
@@ -220,7 +221,7 @@ type SampleFormat struct {
 	RegsUser    bool
 	StackUser   bool
 	Weight      bool
-	DataSource  bool
+	DataSrc     bool
 	Identifier  bool
 	Transaction bool
 	RegsIntr    bool
@@ -246,7 +247,7 @@ func (st SampleFormat) marshal() uint64 {
 		st.RegsUser,
 		st.StackUser,
 		st.Weight,
-		st.DataSource,
+		st.DataSrc,
 		st.Identifier,
 		st.Transaction,
 		st.RegsIntr,
@@ -546,8 +547,7 @@ type SampleRecord struct {
 	BranchStack      []BranchEntry
 	UserRegsABI      uint64
 	UserRegs         []uint64
-	UserStackSize    uint64
-	UserStackData    []uint64
+	UserStack        []byte
 	UserStackDynSize uint64
 	Weight           uint64
 	DataSrc          uint64
@@ -581,7 +581,7 @@ func (sr *SampleRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 		}
 	}
 	if ev.attr.SampleFormat.Raw {
-		f.bytes(&sr.Data)
+		f.uint32sizeBytes(&sr.Data)
 	}
 	if ev.attr.SampleFormat.BranchStack {
 		var nr uint64
@@ -604,7 +604,30 @@ func (sr *SampleRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 			}
 		}
 	}
-	// TODO(acln): non-ABI bits
+	if ev.attr.SampleFormat.RegsUser {
+		f.uint64(&sr.UserRegsABI)
+		sr.UserRegs = make([]uint64, bits.OnesCount64(ev.attr.SampleRegsUser))
+		for i := 0; i < len(sr.UserRegs); i++ {
+			f.uint64(&sr.UserRegs[i])
+		}
+	}
+	if ev.attr.SampleFormat.StackUser {
+		f.uint64sizeBytes(&sr.UserStack)
+		if len(sr.UserStack) > 0 {
+			f.uint64(&sr.UserStackDynSize)
+		}
+	}
+	f.uint64Cond(ev.attr.SampleFormat.Weight, &sr.Weight)
+	f.uint64Cond(ev.attr.SampleFormat.DataSrc, &sr.DataSrc)
+	f.uint64Cond(ev.attr.SampleFormat.Transaction, &sr.Transaction)
+	if ev.attr.SampleFormat.RegsIntr {
+		f.uint64(&sr.IntrRegsABI)
+		sr.IntrRegs = make([]uint64, bits.OnesCount64(ev.attr.SampleRegsIntr))
+		for i := 0; i < len(sr.IntrRegs); i++ {
+			f.uint64(&sr.IntrRegs[i])
+		}
+	}
+	f.uint64Cond(ev.attr.SampleFormat.PhysAddr, &sr.PhysAddr)
 }
 
 type SampleGroupRecord struct {
@@ -629,8 +652,7 @@ type SampleGroupRecord struct {
 	BranchStack      []BranchEntry
 	UserRegsABI      uint64
 	UserRegs         []uint64
-	UserStackSize    uint64
-	UserStackData    []uint64
+	UserStack        []byte
 	UserStackDynSize uint64
 	Weight           uint64
 	DataSrc          uint64
@@ -664,7 +686,7 @@ func (sr *SampleGroupRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 		}
 	}
 	if ev.attr.SampleFormat.Raw {
-		f.bytes(&sr.Data)
+		f.uint32sizeBytes(&sr.Data)
 	}
 	if ev.attr.SampleFormat.BranchStack {
 		var nr uint64
@@ -687,7 +709,30 @@ func (sr *SampleGroupRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 			}
 		}
 	}
-	// TODO(acln): non-ABI bits
+	if ev.attr.SampleFormat.RegsUser {
+		f.uint64(&sr.UserRegsABI)
+		sr.UserRegs = make([]uint64, bits.OnesCount64(ev.attr.SampleRegsUser))
+		for i := 0; i < len(sr.UserRegs); i++ {
+			f.uint64(&sr.UserRegs[i])
+		}
+	}
+	if ev.attr.SampleFormat.StackUser {
+		f.uint64sizeBytes(&sr.UserStack)
+		if len(sr.UserStack) > 0 {
+			f.uint64(&sr.UserStackDynSize)
+		}
+	}
+	f.uint64Cond(ev.attr.SampleFormat.Weight, &sr.Weight)
+	f.uint64Cond(ev.attr.SampleFormat.DataSrc, &sr.DataSrc)
+	f.uint64Cond(ev.attr.SampleFormat.Transaction, &sr.Transaction)
+	if ev.attr.SampleFormat.RegsIntr {
+		f.uint64(&sr.IntrRegsABI)
+		sr.IntrRegs = make([]uint64, bits.OnesCount64(ev.attr.SampleRegsIntr))
+		for i := 0; i < len(sr.IntrRegs); i++ {
+			f.uint64(&sr.IntrRegs[i])
+		}
+	}
+	f.uint64Cond(ev.attr.SampleFormat.PhysAddr, &sr.PhysAddr)
 }
 
 type BranchEntry struct {

@@ -489,9 +489,9 @@ type Attr struct {
 	// is set.
 	ClockID int32
 
-	// SampleRegsInt is the set of register to dump for each sample.
+	// SampleRegsIntr is the set of register to dump for each sample.
 	// See asm/perf_regs.h for details.
-	SampleRegsInt uint64
+	SampleRegsIntr uint64
 
 	// AuxWatermark is the watermark for the aux area.
 	AuxWatermark uint32
@@ -518,7 +518,7 @@ func (a Attr) sysAttr() *unix.PerfEventAttr {
 		Sample_regs_user:   a.SampleRegsUser,
 		Sample_stack_user:  a.SampleStackUser,
 		Clockid:            a.ClockID,
-		Sample_regs_intr:   a.SampleRegsInt,
+		Sample_regs_intr:   a.SampleRegsIntr,
 		Aux_watermark:      a.AuxWatermark,
 		Sample_max_stack:   a.SampleMaxStack,
 	}

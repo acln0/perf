@@ -40,9 +40,17 @@ func (f *fields) uint32Cond(cond bool, a, b *uint32) {
 	}
 }
 
-func (f *fields) bytes(b *[]byte) {
+func (f *fields) uint32sizeBytes(b *[]byte) {
 	size := *(*uint32)(unsafe.Pointer(&(*f)[0]))
 	f.advance(4)
+	data := make([]byte, size)
+	copy(data, *f)
+	f.advance(int(size))
+}
+
+func (f *fields) uint64sizeBytes(b *[]byte) {
+	size := *(*uint64)(unsafe.Pointer(&(*f)[0]))
+	f.advance(8)
 	data := make([]byte, size)
 	copy(data, *f)
 	f.advance(int(size))
