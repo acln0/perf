@@ -743,21 +743,18 @@ func HardwareCacheCounters(caches []Cache, ops []CacheOp, results []CacheOpResul
 // for the value of the trace point associated with the specified category and
 // event, and returns an *MarshalAttr with the Type and Config fields set
 // to the appropriate values.
-func NewTracepoint(category string, event string) (Attr, error) {
+func NewTracepoint(category string, event string) (*Attr, error) {
 	f := filepath.Join("/sys/kernel/debug/tracing/events", category, event, "id")
 	content, err := ioutil.ReadFile(f)
 	if err != nil {
-		return Attr{}, err
+		return nil, err
 	}
 	nr := strings.TrimSpace(string(content)) // remove trailing newline
 	config, err := strconv.ParseUint(nr, 10, 64)
 	if err != nil {
-		return Attr{}, err
+		return nil, err
 	}
-	return Attr{
-		Type:   TracepointEvent,
-		Config: config,
-	}, nil
+	return &Attr{Type: TracepointEvent, Config: config}, nil
 }
 
 // NewBreakpoint returns an MarshalAttr configured to record breakpoint events.
@@ -772,8 +769,8 @@ func NewTracepoint(category string, event string) (Attr, error) {
 //
 // Breakpoint sets the Type, BreakpointType, Config1 and Config2 fields on
 // the returned MarshalAttr.
-func NewBreakpoint(typ BreakpointType, addr uint64, length BreakpointLength) Attr {
-	return Attr{
+func NewBreakpoint(typ BreakpointType, addr uint64, length BreakpointLength) *Attr {
+	return &Attr{
 		Type:           BreakpointEvent,
 		BreakpointType: uint32(typ),
 		Config1:        addr,

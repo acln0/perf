@@ -107,7 +107,7 @@ func TestTracepoint(t *testing.T) {
 		Watermark: true,
 	}
 
-	ev, err := Open(&attr, CallingThread, AnyCPU, nil, 0)
+	ev, err := Open(attr, CallingThread, AnyCPU, nil, 0)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
