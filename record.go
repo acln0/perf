@@ -525,7 +525,6 @@ func (rr *ReadGroupRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 
 type SampleRecord struct {
 	// ABI fields:
-
 	RecordHeader
 	Identifier uint64
 	IP         uint64
@@ -542,7 +541,6 @@ type SampleRecord struct {
 	Callchain  []uint64
 
 	// Non-ABI fields:
-
 	Data             []byte
 	BranchStack      []BranchEntry
 	UserRegsABI      uint64
