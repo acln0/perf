@@ -1044,5 +1044,16 @@ func (opt Options) marshal() uint64 {
 		opt.writeBackward,
 		opt.Namespaces,
 	}
-	return marshalBitwiseUint64(fields)
+	val := marshalBitwiseUint64(fields)
+	const (
+		skidlsb = 15
+		skidmsb = 16
+	)
+	if opt.PreciseIP&0x01 != 0 {
+		val |= 1 << skidlsb
+	}
+	if opt.PreciseIP&0x10 != 0 {
+		val |= 1 << skidmsb
+	}
+	return val
 }
