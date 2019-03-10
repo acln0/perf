@@ -10,51 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"acln.ro/perf/internal/testasm"
-
 	"golang.org/x/sys/unix"
 )
-
-func TestManualGroupWire(t *testing.T) {
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-
-	insns := Instructions.MarshalAttr()
-	insns.CountFormat = CountFormat{
-		TotalTimeEnabled: true,
-		TotalTimeRunning: true,
-		Group:            true,
-		ID:               true,
-	}
-	insns.Options.Disabled = true
-	insns.Options.ExcludeKernel = true
-	insns.Options.ExcludeHypervisor = true
-
-	cycles := CPUCycles.MarshalAttr()
-	cycles.Options.ExcludeKernel = true
-	cycles.Options.ExcludeHypervisor = true
-
-	iev, err := Open(insns, CallingThread, AnyCPU, nil, 0)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	defer iev.Close()
-
-	cev, err := Open(cycles, CallingThread, AnyCPU, iev, 0)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	defer cev.Close()
-
-	counts, err := iev.MeasureGroup(func() {
-		testasm.SumN(50000)
-	})
-	if err != nil {
-		t.Fatalf("ReadGroupCount: %v", err)
-	}
-
-	t.Logf("%+v instructions, %+v CPU cycles in %v %v", counts.Counts[0], counts.Counts[1], counts.TimeEnabled, counts.TimeRunning)
-}
 
 func TestTracepoint(t *testing.T) {
 	runtime.LockOSThread()

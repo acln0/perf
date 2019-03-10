@@ -7,7 +7,6 @@ package perf_test
 import (
 	"fmt"
 	"runtime"
-	"sort"
 	"testing"
 	"time"
 
@@ -15,10 +14,80 @@ import (
 	"acln.ro/perf/internal/testasm"
 )
 
-func TestMeasurementOverhead(t *testing.T) {
-	if testing.Short() {
-		t.Skip()
+func TestSumIPC(t *testing.T) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	insns := perf.Instructions.MarshalAttr()
+	insns.CountFormat = perf.CountFormat{
+		TotalTimeEnabled: true,
+		TotalTimeRunning: true,
+		Group:            true,
+		ID:               true,
 	}
+	insns.Options = perf.Options{
+		Disabled: true,
+	}
+
+	cycles := perf.CPUCycles.MarshalAttr()
+
+	iev, err := perf.Open(insns, perf.CallingThread, perf.AnyCPU, nil, 0)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer iev.Close()
+
+	cev, err := perf.Open(cycles, perf.CallingThread, perf.AnyCPU, iev, 0)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer cev.Close()
+
+	Nvalues := []uint64{
+		1,
+		10,
+		100,
+		1000,
+		10000,
+		100000,
+		1000000,
+		10000000,
+		100000000,
+		1000000000,
+	}
+	for _, N := range Nvalues {
+		counts, err := iev.MeasureGroup(func() {
+			testasm.SumN(N)
+		})
+		if err != nil {
+			t.Fatalf("ReadGroupCount: %v", err)
+		}
+		instructions := counts.Counts[0].Value
+		cycles := counts.Counts[1].Value
+		ipc := sumIPC{
+			N:            N,
+			instructions: instructions,
+			cycles:       cycles,
+			ipc:          float64(instructions) / float64(cycles),
+			running:      counts.TimeRunning,
+		}
+		t.Log(ipc)
+	}
+}
+
+type sumIPC struct {
+	N            uint64
+	instructions uint64
+	cycles       uint64
+	ipc          float64
+	running      time.Duration
+}
+
+func (i sumIPC) String() string {
+	return fmt.Sprintf("N = %11d | instructions = %11d | cycles = %11d | ipc = %6.3f | %v", i.N, i.instructions, i.cycles, i.ipc, i.running)
+}
+
+func TestSumOverhead(t *testing.T) {
 	a := perf.Instructions.MarshalAttr()
 	a.CountFormat = perf.CountFormat{
 		TotalTimeEnabled: true,
@@ -49,10 +118,7 @@ func TestMeasurementOverhead(t *testing.T) {
 		10000000,
 		100000000,
 		1000000000,
-		10000000000,
 	}
-	var measurements []overheadMeasurement
-
 	for _, N := range Nvalues {
 		count, err := ev.Measure(func() {
 			testasm.SumN(N)
@@ -64,35 +130,25 @@ func TestMeasurementOverhead(t *testing.T) {
 		if count.Value < ideal {
 			t.Fatalf("got count %d with ideal %d", count.Value, ideal)
 		}
-		measurements = append(measurements, overheadMeasurement{
+		o := sumOverhead{
 			N:        N,
 			got:      count.Value,
 			ideal:    ideal,
-			enabled:  count.TimeEnabled,
-			running:  count.TimeRunning,
 			overhead: float64(count.Value) / float64(ideal),
-		})
-	}
-
-	decreasing := sort.SliceIsSorted(measurements, func(i, j int) bool {
-		return measurements[i].overhead > measurements[j].overhead
-	})
-	t.Logf("monotonically decreasing: %t", decreasing)
-	for _, m := range measurements {
-		t.Log(m)
+			running:  count.TimeRunning,
+		}
+		t.Log(o)
 	}
 }
 
-type overheadMeasurement struct {
+type sumOverhead struct {
 	N        uint64
 	got      uint64
 	ideal    uint64
 	overhead float64
-	enabled  time.Duration
 	running  time.Duration
 }
 
-func (m overheadMeasurement) String() string {
-	return fmt.Sprintf("N = %11d | overhead = %10.6f | running: %v",
-		m.N, m.overhead, m.running)
+func (o sumOverhead) String() string {
+	return fmt.Sprintf("N = %11d | instructions = %11d | ideal = %11d | overhead = %10.6f | %v", o.N, o.got, o.ideal, o.overhead, o.running)
 }
