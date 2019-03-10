@@ -329,12 +329,12 @@ const cpuModeMask = 7
 //
 // TODO(acln): add to x/sys/unix?
 const (
-	UnknownMode     CPUMode = 0
-	KernelMode      CPUMode = 1
-	UserMode        CPUMode = 2
-	HypervisorMode  CPUMode = 3
-	GuestKernelMode CPUMode = 4
-	GuestUserMode   CPUMode = 5
+	UnknownMode CPUMode = iota
+	KernelMode
+	UserMode
+	HypervisorMode
+	GuestKernelMode
+	GuestUserMode
 )
 
 // RawRecord is a raw overflow record, read from the memory mapped ring
