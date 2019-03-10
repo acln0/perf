@@ -946,7 +946,7 @@ func (b BranchSampleFormat) marshal() uint64 {
 // BranchSamplePrivilege speifies a branch sample privilege level. If a
 // level is not set explicitly, the kernel will use the event's privilege
 // level. Event and branch privilege levels do not have to match.
-type BranchSamplePrivilege uint32
+type BranchSamplePrivilege uint64
 
 // Branch sample privilege values. Values should be |-ed together.
 const (
@@ -956,7 +956,7 @@ const (
 )
 
 // BranchSample specifies a type of branch to sample.
-type BranchSample uint32
+type BranchSample uint64
 
 // Branch sample bits. Values should be |-ed together.
 const (
