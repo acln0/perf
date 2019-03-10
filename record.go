@@ -206,26 +206,26 @@ type pollresp struct {
 
 // SampleFormat configures information requested in overflow packets.
 type SampleFormat struct {
-	IP          bool
-	Tid         bool
-	Time        bool
-	Addr        bool
-	Read        bool
-	Callchain   bool
-	ID          bool
-	CPU         bool
-	Period      bool
-	StreamID    bool
-	Raw         bool
-	BranchStack bool
-	RegsUser    bool
-	StackUser   bool
-	Weight      bool
-	DataSrc     bool
-	Identifier  bool
-	Transaction bool
-	RegsIntr    bool
-	PhysAddr    bool
+	IP              bool
+	Tid             bool
+	Time            bool
+	Addr            bool
+	Count           bool
+	Callchain       bool
+	ID              bool
+	CPU             bool
+	Period          bool
+	StreamID        bool
+	Raw             bool
+	BranchStack     bool
+	UserRegisters   bool
+	UserStack       bool
+	Weight          bool
+	DataSource      bool
+	Identifier      bool
+	Transaction     bool
+	IntrRegisters   bool
+	PhysicalAddress bool
 }
 
 // marshal packs the SampleFormat into a uint64.
@@ -236,7 +236,7 @@ func (st SampleFormat) marshal() uint64 {
 		st.Tid,
 		st.Time,
 		st.Addr,
-		st.Read,
+		st.Count,
 		st.Callchain,
 		st.ID,
 		st.CPU,
@@ -244,22 +244,22 @@ func (st SampleFormat) marshal() uint64 {
 		st.StreamID,
 		st.Raw,
 		st.BranchStack,
-		st.RegsUser,
-		st.StackUser,
+		st.UserRegisters,
+		st.UserStack,
 		st.Weight,
-		st.DataSrc,
+		st.DataSource,
 		st.Identifier,
 		st.Transaction,
-		st.RegsIntr,
-		st.PhysAddr,
+		st.IntrRegisters,
+		st.PhysicalAddress,
 	}
 	return marshalBitwiseUint64(fields)
 }
 
 // RecordID contains identifiers for when and where a record was collected.
 //
-// TODO(acln): elaborate on when fields are set based on SampleFormat and
-// Options.SampleIDAll.
+// A RecordID is included with a Record if Options.SampleIDAll is set on the
+// associated event. Fields are present based on SampleFormat options.
 type RecordID struct {
 	Pid        uint32
 	Tid        uint32
@@ -315,6 +315,28 @@ type RecordHeader struct {
 // automatically implement a part of the Record interface.
 func (rh RecordHeader) Header() RecordHeader { return rh }
 
+// CPUMode returns the CPU mode in use when the sample happened.
+func (rh RecordHeader) CPUMode() CPUMode {
+	return CPUMode(rh.Misc & cpuModeMask)
+}
+
+// CPUMode is a CPU operation mode.
+type CPUMode uint8
+
+const cpuModeMask = 7
+
+// Known CPU modes.
+//
+// TODO(acln): add to x/sys/unix?
+const (
+	UnknownMode     CPUMode = 0
+	KernelMode      CPUMode = 1
+	UserMode        CPUMode = 2
+	HypervisorMode  CPUMode = 3
+	GuestKernelMode CPUMode = 4
+	GuestUserMode   CPUMode = 5
+)
+
 // RawRecord is a raw overflow record, read from the memory mapped ring
 // buffer associated with an Event.
 //
@@ -368,14 +390,19 @@ func newRecord(ev *Event, rt RecordType) (Record, error) {
 	return newRecordFuncs[rt](ev), nil
 }
 
+// mmapDataBit is PERF_RECORD_MISC_MMAP_DATA
+const mmapDataBit = 1 << 13 // TODO(acln): add to x/sys/unix?
+
+// MmapRecord (PERF_RECORD_MMAP) records PROT_EXEC mappings such that
+// user-space IPs can be correlated to code.
 type MmapRecord struct {
 	RecordHeader
-	Pid      uint32
-	Tid      uint32
-	Addr     uint64
-	Len      uint64
-	Pgoff    uint64
-	Filename string
+	Pid        uint32 // process ID
+	Tid        uint32 // thread ID
+	Addr       uint64 // address of the allocated memory
+	Len        uint64 // length of the allocated memory
+	PageOffset uint64 // page offset of the allocated memory
+	Filename   string // describes backing of allocated memory
 	RecordID
 }
 
@@ -385,15 +412,22 @@ func (mr *MmapRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	f.uint32(&mr.Pid, &mr.Tid)
 	f.uint64(&mr.Addr)
 	f.uint64(&mr.Len)
-	f.uint64(&mr.Pgoff)
+	f.uint64(&mr.PageOffset)
 	f.string(&mr.Filename)
 	f.id(&mr.RecordID, ev)
 }
 
+// Executable returns a boolean indicating whether the mapping is executable.
+func (mr *MmapRecord) Executable() bool {
+	// The data bit is set when the mapping is _not_ executable.
+	return mr.RecordHeader.Misc&mmapDataBit == 0
+}
+
+// LostRecord (PERF_RECORD_LOST) indicates when events are lost.
 type LostRecord struct {
 	RecordHeader
-	ID   uint64
-	Lost uint64
+	ID   uint64 // the unique ID for the lost events
+	Lost uint64 // the number of lost events
 	RecordID
 }
 
@@ -405,11 +439,12 @@ func (lr *LostRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	f.id(&lr.RecordID, ev)
 }
 
+// CommRecord (PERF_RECORD_COMM) indicates a change in the process name.
 type CommRecord struct {
 	RecordHeader
-	Pid  uint32
-	Tid  uint32
-	Comm string
+	Pid     uint32 // process ID
+	Tid     uint32 // threadID
+	NewName string // the new name of the process
 	RecordID
 }
 
@@ -417,17 +452,27 @@ func (cr *CommRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	cr.RecordHeader = raw.Header
 	f := raw.fields()
 	f.uint32(&cr.Pid, &cr.Tid)
-	f.string(&cr.Comm)
+	f.string(&cr.NewName)
 	f.id(&cr.RecordID, ev)
 }
 
+// commExecBit is PERF_RECORD_MISC_COMM_EXEC
+const commExecBit = 1 << 13 // TODO(acln): add to x/sys/unix?
+
+// WasExec returns a boolean indicating whether a process name change
+// was caused by an exec(2) system call.
+func (cr *CommRecord) WasExec() bool {
+	return cr.RecordHeader.Misc&(commExecBit) != 0
+}
+
+// ExitRecord (PERF_RECORD_EXIT) indicates a process exit event.
 type ExitRecord struct {
 	RecordHeader
-	Pid  uint32
-	Ppid uint32
-	Tid  uint32
-	Ptid uint32
-	Time uint64
+	Pid  uint32 // process ID
+	Ppid uint32 // parent process ID
+	Tid  uint32 // thread ID
+	Ptid uint32 // parent thread ID
+	Time uint64 // time when the process exited
 	RecordID
 }
 
@@ -440,6 +485,7 @@ func (er *ExitRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	f.id(&er.RecordID, ev)
 }
 
+// ThrottleRecord (PERF_RECORD_THROTTLE) indicates a throttle event.
 type ThrottleRecord struct {
 	RecordHeader
 	Time     uint64
@@ -457,6 +503,7 @@ func (tr *ThrottleRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	f.id(&tr.RecordID, ev)
 }
 
+// UnthrottleRecord (PERF_RECORD_UNTHROTTLE) indicates an unthrottle event.
 type UnthrottleRecord struct {
 	RecordHeader
 	Time     uint64
@@ -474,13 +521,14 @@ func (ur *UnthrottleRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	f.id(&ur.RecordID, ev)
 }
 
+// ForkRecord (PERF_RECORD_FORK) indicates a fork event.
 type ForkRecord struct {
 	RecordHeader
-	Pid  uint32
-	Ppid uint32
-	Tid  uint32
-	Ptid uint32
-	Time uint64
+	Pid  uint32 // process ID
+	Ppid uint32 // parent process ID
+	Tid  uint32 // thread ID
+	Ptid uint32 // parent thread ID
+	Time uint64 // time when the fork occurred (TODO: is that true?)
 	RecordID
 }
 
@@ -493,11 +541,12 @@ func (fr *ForkRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	f.id(&fr.RecordID, ev)
 }
 
+// ReadRecord (PERF_RECORD_READ) indicates a read event.
 type ReadRecord struct {
 	RecordHeader
-	Pid    uint32
-	Tid    uint32
-	Values Count
+	Pid   uint32 // process ID
+	Tid   uint32 // thread ID
+	Count Count  // count value
 	RecordID
 }
 
@@ -505,14 +554,15 @@ func (rr *ReadRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	rr.RecordHeader = raw.Header
 	f := raw.fields()
 	f.uint32(&rr.Pid, &rr.Tid)
-	f.count(&rr.Values, ev)
+	f.count(&rr.Count, ev)
 }
 
+// ReadGroupRecord (PERF_RECORD_READ) indicates a read event on a group event.
 type ReadGroupRecord struct {
 	RecordHeader
-	Pid    uint32
-	Tid    uint32
-	Values GroupCount
+	Pid        uint32     // process ID
+	Tid        uint32     // thread ID
+	GroupCount GroupCount // group count values
 	RecordID
 }
 
@@ -520,11 +570,18 @@ func (rr *ReadGroupRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	rr.RecordHeader = raw.Header
 	f := raw.fields()
 	f.uint32(&rr.Pid, &rr.Tid)
-	f.groupCount(&rr.Values, ev)
+	f.groupCount(&rr.GroupCount, ev)
 }
 
+// SampleRecord indicates a sample.
+//
+// All the fields up to and including Callchain represent ABI bits. All the
+// fields starting with Data are non-ABI and have no compatibility guarantees.
+//
+// Fields on SamplRecord are set according to the SampleFormat the event
+// was configured with. A boolean flag in SampleFormat typically enables
+// the homonymous field in SampleRecord.
 type SampleRecord struct {
-	// ABI fields:
 	RecordHeader
 	Identifier uint64
 	IP         uint64
@@ -537,22 +594,156 @@ type SampleRecord struct {
 	CPU        uint32
 	Res        uint32
 	Period     uint64
-	Values     Count
+	Count      Count
 	Callchain  []uint64
 
-	// Non-ABI fields:
-	Data             []byte
-	BranchStack      []BranchEntry
-	UserRegsABI      uint64
-	UserRegs         []uint64
-	UserStack        []byte
-	UserStackDynSize uint64
-	Weight           uint64
-	DataSrc          uint64
-	Transaction      uint64
-	IntrRegsABI      uint64
-	IntrRegs         []uint64
-	PhysAddr         uint64
+	Raw                  []byte
+	BranchStack          []BranchEntry
+	UserRegisterABI      uint64
+	UserRegisters        []uint64
+	UserStack            []byte
+	UserStackDynamicSize uint64
+	Weight               uint64
+	DataSource           DataSource
+	Transaction          Transaction
+	IntrRegisterABI      uint64
+	IntrRegisters        []uint64
+	PhysicalAddress      uint64
+}
+
+type DataSource uint64 // TODO(acln): implement
+
+// MemOp is a memory operation.
+type MemOp uint8
+
+// Known memory operations.
+//
+// TODO(acln): add these to x/sys/unix?
+const (
+	MemOpNA MemOp = 1 << iota
+	MemOpLoad
+	MemOpStore
+	MemOpPrefetch
+	MemOpExec
+
+	memOpShift = 0
+)
+
+// MemLevel is a memory level.
+type MemLevel uint32
+
+// Known memory levels.
+const (
+	MemLevelNA MemLevel = 1 << iota
+	MemLevelHit
+	MemLevelMiss
+	MemLevelL1
+	MemLevelLFB
+	MemLevelL2
+	MemLevelL3
+	MemLevelLocalDRAM
+	MemLevelRemoteDRAM1
+	MemLevelRemoteDRAM2
+	MemLevelRemoteCache1
+	MemLevelRemoteCache2
+	MemLevelIO
+	MemLevelUncached
+
+	memLevelShift = 5
+)
+
+const memRemoteShift = 37
+
+// MemLevelNumber is a memory level number.
+type MemLevelNumber uint8
+
+// Known memory level numbers.
+const (
+	MemLevelNumberL1 MemLevelNumber = iota
+	MemLevelNumberL2
+	MemLevelNumberL3
+	MemLevelNumberL4
+
+	MemLevelNumberAnyCache = iota + 0x0b
+	MemLevelNumberLFB
+	MemLevelNumberRAM
+	MemLevelNumberPMem
+	MemLevelNumberNA
+
+	memLevelNumShift = 33
+)
+
+// MemSnoopMode is a memory snoop mode.
+type MemSnoopMode uint8
+
+// Known memory snoop modes.
+const (
+	MemSnoopModeNA = 1 << iota
+	MemSnoopModeNone
+	MemSnoopModeHit
+	MemSnoopModeMiss
+	MemSnoopModeHitModified
+
+	memShoopModeShift = 19
+)
+
+// TODO: missing PERF_MEM_SNOOPX_*, PERF_MEM_LOCK_*, PERF_MEM_TLB_*
+
+// Transaction is a source of a transactional memory abort.
+type Transaction uint64
+
+// PERF_TXN_* bits.
+//
+// TODO(acln): add to x/sys/unix?
+const (
+	txnElision = 1 << iota
+	txnTransaction
+	txnSync
+	txnAsync
+	txnRetry
+	txnConflict
+	txnCapacityWrite
+	txnCapacityRead
+)
+
+// Elision indicates an abort from an elision type transaction (Intel CPU
+// specific).
+func (txn Transaction) Elision() bool { return txn.set(txnElision) }
+
+// Transaction indicates an abort from a generic transaction.
+func (txn Transaction) Transaction() bool { return txn.set(txnTransaction) }
+
+// Sync indicates a synchronous abort (related to the reported instruction).
+func (txn Transaction) Sync() bool { return txn.set(txnSync) }
+
+// Async indicates an asynchronous abort (unrelated to the reported
+// instruction).
+func (txn Transaction) Async() bool { return txn.set(txnAsync) }
+
+// Retryable indicates whether retrying the transaction may have succeeded.
+func (txn Transaction) Retryable() bool { return txn.set(txnRetry) }
+
+// Conflict indicates an abort rue to memory conflicts with other threads.
+func (txn Transaction) Conflict() bool { return txn.set(txnConflict) }
+
+// WriteCapacity indicates an abort due to write capacity overflow.
+func (txn Transaction) WriteCapacity() bool { return txn.set(txnCapacityWrite) }
+
+// ReadCapacity indicates an abort due to read capacity overflow.
+func (txn Transaction) ReadCapacity() bool { return txn.set(txnCapacityRead) }
+
+func (txn Transaction) set(bit Transaction) bool { return txn&bit != 0 }
+
+// txnAbortMask is PERF_TXN_ABORT_MASK
+const txnAbortMask = 0xffffffff // TODO(acln): add to x/sys/unix?
+
+// txnAbortShift is PERF_TXN_ABORT_SHIFT
+const txnAbortShift = 32 // TODO(acln): add to x/sys/unix?
+
+// UserAbortCode returns the user-specified abort code associated with
+// the transaction.
+func (txn Transaction) UserAbortCode() uint32 {
+	return uint32((txn >> txnAbortShift) & txnAbortMask)
 }
 
 func (sr *SampleRecord) DecodeFrom(raw *RawRecord, ev *Event) {
@@ -567,8 +758,8 @@ func (sr *SampleRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	f.uint64Cond(ev.attr.SampleFormat.StreamID, &sr.StreamID)
 	f.uint32Cond(ev.attr.SampleFormat.CPU, &sr.CPU, &sr.Res)
 	f.uint64Cond(ev.attr.SampleFormat.Period, &sr.Period)
-	if ev.attr.SampleFormat.Read {
-		f.count(&sr.Values, ev)
+	if ev.attr.SampleFormat.Count {
+		f.count(&sr.Count, ev)
 	}
 	if ev.attr.SampleFormat.Callchain {
 		var nr uint64
@@ -579,7 +770,7 @@ func (sr *SampleRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 		}
 	}
 	if ev.attr.SampleFormat.Raw {
-		f.uint32sizeBytes(&sr.Data)
+		f.uint32sizeBytes(&sr.Raw)
 	}
 	if ev.attr.SampleFormat.BranchStack {
 		var nr uint64
@@ -602,34 +793,60 @@ func (sr *SampleRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 			}
 		}
 	}
-	if ev.attr.SampleFormat.RegsUser {
-		f.uint64(&sr.UserRegsABI)
-		sr.UserRegs = make([]uint64, bits.OnesCount64(ev.attr.SampleRegsUser))
-		for i := 0; i < len(sr.UserRegs); i++ {
-			f.uint64(&sr.UserRegs[i])
+	if ev.attr.SampleFormat.UserRegisters {
+		f.uint64(&sr.UserRegisterABI)
+		num := bits.OnesCount64(ev.attr.SampleRegsUser)
+		sr.UserRegisters = make([]uint64, num)
+		for i := 0; i < len(sr.UserRegisters); i++ {
+			f.uint64(&sr.UserRegisters[i])
 		}
 	}
-	if ev.attr.SampleFormat.StackUser {
+	if ev.attr.SampleFormat.UserStack {
 		f.uint64sizeBytes(&sr.UserStack)
 		if len(sr.UserStack) > 0 {
-			f.uint64(&sr.UserStackDynSize)
+			f.uint64(&sr.UserStackDynamicSize)
 		}
 	}
 	f.uint64Cond(ev.attr.SampleFormat.Weight, &sr.Weight)
-	f.uint64Cond(ev.attr.SampleFormat.DataSrc, &sr.DataSrc)
-	f.uint64Cond(ev.attr.SampleFormat.Transaction, &sr.Transaction)
-	if ev.attr.SampleFormat.RegsIntr {
-		f.uint64(&sr.IntrRegsABI)
-		sr.IntrRegs = make([]uint64, bits.OnesCount64(ev.attr.SampleRegsIntr))
-		for i := 0; i < len(sr.IntrRegs); i++ {
-			f.uint64(&sr.IntrRegs[i])
+	if ev.attr.SampleFormat.DataSource {
+		var ds uint64
+		f.uint64(&ds)
+		sr.DataSource = DataSource(ds)
+	}
+	if ev.attr.SampleFormat.Transaction {
+		var tx uint64
+		f.uint64(&tx)
+		sr.Transaction = Transaction(tx)
+	}
+	if ev.attr.SampleFormat.IntrRegisters {
+		f.uint64(&sr.IntrRegisterABI)
+		num := bits.OnesCount64(ev.attr.SampleRegsIntr)
+		sr.IntrRegisters = make([]uint64, num)
+		for i := 0; i < len(sr.IntrRegisters); i++ {
+			f.uint64(&sr.IntrRegisters[i])
 		}
 	}
-	f.uint64Cond(ev.attr.SampleFormat.PhysAddr, &sr.PhysAddr)
+	f.uint64Cond(ev.attr.SampleFormat.PhysicalAddress, &sr.PhysicalAddress)
 }
 
+// exactIPBit is PERF_RECORD_MISC_EXACT_IP
+const exactIPBit = 1 << 14 // TODO(acln): add to x/sys/unix?
+
+// ExactIP indicates that sr.IP points to the actual instruction that
+// triggered the event. See also Options.PreciseIP.
+func (sr *SampleRecord) ExactIP() bool {
+	return sr.RecordHeader.Misc&exactIPBit != 0
+}
+
+// SampleGroupRecord indicates a sample from an event group.
+//
+// All the fields up to and including Callchain represent ABI bits. All the
+// fields starting with Data are non-ABI and have no compatibility guarantees.
+//
+// Fields on SampleGroupRecord are set according to the SampleFormat the event
+// was configured with. A boolean flag in SampleFormat typically enables the
+// homonymous field in SampleGroupRecord.
 type SampleGroupRecord struct {
-	// ABI fields:
 	RecordHeader
 	Identifier uint64
 	IP         uint64
@@ -642,22 +859,21 @@ type SampleGroupRecord struct {
 	CPU        uint32
 	Res        uint32
 	Period     uint64
-	Values     GroupCount
+	Count      GroupCount
 	Callchain  []uint64
 
-	// Non-ABI fields:
-	Data             []byte
-	BranchStack      []BranchEntry
-	UserRegsABI      uint64
-	UserRegs         []uint64
-	UserStack        []byte
-	UserStackDynSize uint64
-	Weight           uint64
-	DataSrc          uint64
-	Transaction      uint64
-	IntrRegsABI      uint64
-	IntrRegs         []uint64
-	PhysAddr         uint64
+	Raw                  []byte
+	BranchStack          []BranchEntry
+	UserRegisterABI      uint64
+	UserRegisters        []uint64
+	UserStack            []byte
+	UserStackDynamicSize uint64
+	Weight               uint64
+	DataSource           DataSource
+	Transaction          Transaction
+	IntrRegisterABI      uint64
+	IntrRegisters        []uint64
+	PhysicalAddress      uint64
 }
 
 func (sr *SampleGroupRecord) DecodeFrom(raw *RawRecord, ev *Event) {
@@ -672,8 +888,8 @@ func (sr *SampleGroupRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	f.uint64Cond(ev.attr.SampleFormat.StreamID, &sr.StreamID)
 	f.uint32Cond(ev.attr.SampleFormat.CPU, &sr.CPU, &sr.Res)
 	f.uint64Cond(ev.attr.SampleFormat.Period, &sr.Period)
-	if ev.attr.SampleFormat.Read {
-		f.groupCount(&sr.Values, ev)
+	if ev.attr.SampleFormat.Count {
+		f.groupCount(&sr.Count, ev)
 	}
 	if ev.attr.SampleFormat.Callchain {
 		var nr uint64
@@ -684,7 +900,7 @@ func (sr *SampleGroupRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 		}
 	}
 	if ev.attr.SampleFormat.Raw {
-		f.uint32sizeBytes(&sr.Data)
+		f.uint32sizeBytes(&sr.Raw)
 	}
 	if ev.attr.SampleFormat.BranchStack {
 		var nr uint64
@@ -707,30 +923,46 @@ func (sr *SampleGroupRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 			}
 		}
 	}
-	if ev.attr.SampleFormat.RegsUser {
-		f.uint64(&sr.UserRegsABI)
-		sr.UserRegs = make([]uint64, bits.OnesCount64(ev.attr.SampleRegsUser))
-		for i := 0; i < len(sr.UserRegs); i++ {
-			f.uint64(&sr.UserRegs[i])
+	if ev.attr.SampleFormat.UserRegisters {
+		f.uint64(&sr.UserRegisterABI)
+		num := bits.OnesCount64(ev.attr.SampleRegsUser)
+		sr.UserRegisters = make([]uint64, num)
+		for i := 0; i < len(sr.UserRegisters); i++ {
+			f.uint64(&sr.UserRegisters[i])
 		}
 	}
-	if ev.attr.SampleFormat.StackUser {
+	if ev.attr.SampleFormat.UserStack {
 		f.uint64sizeBytes(&sr.UserStack)
 		if len(sr.UserStack) > 0 {
-			f.uint64(&sr.UserStackDynSize)
+			f.uint64(&sr.UserStackDynamicSize)
 		}
 	}
 	f.uint64Cond(ev.attr.SampleFormat.Weight, &sr.Weight)
-	f.uint64Cond(ev.attr.SampleFormat.DataSrc, &sr.DataSrc)
-	f.uint64Cond(ev.attr.SampleFormat.Transaction, &sr.Transaction)
-	if ev.attr.SampleFormat.RegsIntr {
-		f.uint64(&sr.IntrRegsABI)
-		sr.IntrRegs = make([]uint64, bits.OnesCount64(ev.attr.SampleRegsIntr))
-		for i := 0; i < len(sr.IntrRegs); i++ {
-			f.uint64(&sr.IntrRegs[i])
+	if ev.attr.SampleFormat.DataSource {
+		var ds uint64
+		f.uint64(&ds)
+		sr.DataSource = DataSource(ds)
+	}
+	if ev.attr.SampleFormat.Transaction {
+		var tx uint64
+		f.uint64(&tx)
+		sr.Transaction = Transaction(tx)
+	}
+	if ev.attr.SampleFormat.IntrRegisters {
+		f.uint64(&sr.IntrRegisterABI)
+		num := bits.OnesCount64(ev.attr.SampleRegsIntr)
+		sr.IntrRegisters = make([]uint64, num)
+		for i := 0; i < len(sr.IntrRegisters); i++ {
+			f.uint64(&sr.IntrRegisters[i])
 		}
 	}
-	f.uint64Cond(ev.attr.SampleFormat.PhysAddr, &sr.PhysAddr)
+	f.uint64Cond(ev.attr.SampleFormat.PhysicalAddress, &sr.PhysicalAddress)
+}
+
+// ExactIP indicates that sr.IP points to the actual instruction that
+// triggered the event. See also Options.PreciseIP.
+func (sr *SampleGroupRecord) ExactIP() bool {
+	return sr.RecordHeader.Misc&exactIPBit != 0
 }
 
 type BranchEntry struct {
@@ -744,20 +976,23 @@ type BranchEntry struct {
 	BranchType       uint8
 }
 
+// Mmap2Record (PERF_RECORD_MMAP2) includes extended information on mmap(2)
+// calls returning executable mappings. It is similar to MmapRecord, but
+// includes extra values, allowing unique identification of shared mappings.
 type Mmap2Record struct {
 	RecordHeader
-	Pid           uint32
-	Tid           uint32
-	Addr          uint64
-	Len           uint64
-	Pgoff         uint64
-	Maj           uint32
-	Min           uint32
-	Ino           uint64
-	InoGeneration uint64
-	Prot          uint32
-	Flags         uint32
-	Filename      string
+	Pid             uint32 // process ID
+	Tid             uint32 // thread ID
+	Addr            uint64 // address of the allocated memory
+	Len             uint64 // length of the allocated memory
+	PageOffset      uint64 // page offset of the allocated memory
+	MajorID         uint32 // major ID of the underlying device
+	MinorID         uint32 // minor ID of the underlying device
+	Inode           uint64 // inode number
+	InodeGeneration uint64 // inode generation
+	Prot            uint32 // protection information
+	Flags           uint32 // flags information
+	Filename        string // describes the backing of the allocated memory
 	RecordID
 }
 
@@ -767,36 +1002,62 @@ func (mr *Mmap2Record) DecodeFrom(raw *RawRecord, ev *Event) {
 	f.uint32(&mr.Pid, &mr.Tid)
 	f.uint64(&mr.Addr)
 	f.uint64(&mr.Len)
-	f.uint64(&mr.Pgoff)
-	f.uint32(&mr.Maj, &mr.Min)
-	f.uint64(&mr.Ino)
-	f.uint64(&mr.InoGeneration)
+	f.uint64(&mr.PageOffset)
+	f.uint32(&mr.MajorID, &mr.MinorID)
+	f.uint64(&mr.Inode)
+	f.uint64(&mr.InodeGeneration)
 	f.uint32(&mr.Prot, &mr.Flags)
 	f.string(&mr.Filename)
 	f.id(&mr.RecordID, ev)
 }
 
+// Executable returns a boolean indicating whether the mapping is executable.
+func (mr *Mmap2Record) Executable() bool {
+	// The data bit is set when the mapping is _not_ executable.
+	return mr.RecordHeader.Misc&mmapDataBit == 0
+}
+
+// AuxRecord (PERF_RECORD_AUX) reports that new data is available in the
+// AUX buffer region.
 type AuxRecord struct {
 	RecordHeader
-	AuxOffset uint64
-	AuxSize   uint64
-	Flags     uint64
+	Offset uint64  // offset in the AUX mmap region where the new data begins
+	Size   uint64  // size of data made available
+	Flags  AuxFlag // describes the update
 	RecordID
 }
+
+// AuxFlag describes an update to a record in the AUX buffer region.
+type AuxFlag uint64
+
+// AuxFlag bits.
+//
+// TODO(acln): add to x/sys/unix?
+const (
+	AuxTruncated AuxFlag = 0x01 // record was truncated to fit
+	AuxOverwrite AuxFlag = 0x02 // snapshot from overwrite mode
+	AuxPartial   AuxFlag = 0x04 // record contains gaps
+	AuxCollision AuxFlag = 0x08 // sample collided with another
+)
 
 func (ar *AuxRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	ar.RecordHeader = raw.Header
 	f := raw.fields()
-	f.uint64(&ar.AuxOffset)
-	f.uint64(&ar.AuxSize)
-	f.uint64(&ar.Flags)
+	f.uint64(&ar.Offset)
+	f.uint64(&ar.Size)
+	var flag uint64
+	f.uint64(&flag)
+	ar.Flags = AuxFlag(flag)
 	f.id(&ar.RecordID, ev)
 }
 
+// ItraceStartRecord (PERF_RECORD_ITRACE_START) indicates which process
+// has initiated an instruction trace event, allowing tools to correlate
+// instruction addresses in the AUX buffer with the proper executable.
 type ItraceStartRecord struct {
 	RecordHeader
-	Pid uint32
-	Tid uint32
+	Pid uint32 // process ID of the thread starting an instruction trace
+	Tid uint32 // thread ID of the thread starting an instruction trace
 	RecordID
 }
 
@@ -807,9 +1068,12 @@ func (ir *ItraceStartRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	f.id(&ir.RecordID, ev)
 }
 
+// LostSamplesRecord (PERF_RECORD_LOST_SAMPLES) indicates some number of
+// samples that may have been lost, when using hardware sampling such as
+// Intel PEBS.
 type LostSamplesRecord struct {
 	RecordHeader
-	Lost uint64
+	Lost uint64 // the number of potentially lost samples
 	RecordID
 }
 
@@ -820,6 +1084,8 @@ func (lr *LostSamplesRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	f.id(&lr.RecordID, ev)
 }
 
+// SwitchRecord (PERF_RECORD_SWITCH) indicates that a context switch has
+// happened.
 type SwitchRecord struct {
 	RecordHeader
 	RecordID
@@ -831,6 +1097,26 @@ func (sr *SwitchRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	f.id(&sr.RecordID, ev)
 }
 
+// switchOutBit is PERF_RECORD_MISC_SWITCH_OUT
+const switchOutBit = 1 << 13 // TODO(acln): add to x/sys/unix?
+
+// switchOutPreemptBit is PERF_RECORD_MISC_SWITCH_OUT_PREEMPT
+const switchOutPreemptBit = 1 << 14 // TODO(acln): add to x/sys/unix?
+
+// Out returns a boolean indicating whether the context switch was
+// out of the current process, or into the current process.
+func (sr *SwitchRecord) Out() bool {
+	return sr.RecordHeader.Misc&switchOutBit != 0
+}
+
+// Preempted indicates whether the thread was preempted in TASK_RUNNING state.
+func (sr *SwitchRecord) Preempted() bool {
+	return sr.RecordHeader.Misc&switchOutPreemptBit != 0
+}
+
+// SwitchCPUWideRecord (PERF_RECORD_SWITCH_CPU_WIDE) indicates a context
+// switch, but only occurs when sampling in CPU-wide mode. It provides
+// informatino on the process being switched to / from.
 type SwitchCPUWideRecord struct {
 	RecordHeader
 	Pid uint32
@@ -843,6 +1129,17 @@ func (sr *SwitchCPUWideRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	f := raw.fields()
 	f.uint32(&sr.Pid, &sr.Tid)
 	f.id(&sr.RecordID, ev)
+}
+
+// Out returns a boolean indicating whether the context switch was
+// out of the current process, or into the current process.
+func (sr *SwitchCPUWideRecord) Out() bool {
+	return sr.RecordHeader.Misc&switchOutBit != 0
+}
+
+// Preempted indicates whether the thread was preempted in TASK_RUNNING state.
+func (sr *SwitchCPUWideRecord) Preempted() bool {
+	return sr.RecordHeader.Misc&switchOutPreemptBit != 0
 }
 
 type NamespacesRecord struct {
