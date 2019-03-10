@@ -1032,14 +1032,54 @@ func (nr *NamespacesRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	f.id(&nr.RecordID, ev)
 }
 
-type DataSource uint64 // TODO(acln): implement
+// DataSource records where in the memory hierarchy the data associated with
+// a sampled instruction came from.
+type DataSource uint64
+
+// MemOp returns the recorded memory operation.
+func (ds DataSource) MemOp() MemOp {
+	return MemOp(ds)
+}
+
+// MemLevel returns the recorded memory level.
+func (ds DataSource) MemLevel() MemLevel {
+	return MemLevel(ds >> memLevelShift)
+}
+
+// MemRemote returns the recorded remote bit.
+func (ds DataSource) MemRemote() MemRemote {
+	return MemRemote(ds >> memRemoteShift)
+}
+
+// MemLevelNumber returns the recorded memory level number.
+func (ds DataSource) MemLevelNumber() MemLevelNumber {
+	return MemLevelNumber(ds >> memLevelNumberShift)
+}
+
+// MemSnoopMode returns the recorded memory snoop mode.
+func (ds DataSource) MemSnoopMode() MemSnoopMode {
+	return MemSnoopMode(ds >> memSnoopModeShift)
+}
+
+// MemSnoopModeX returns the recorded extended memory snoop mode.
+func (ds DataSource) MemSnoopModeX() MemSnoopModeX {
+	return MemSnoopModeX(ds >> memSnoopModeXShift)
+}
+
+// MemLock returns the recorded memory lock mode.
+func (ds DataSource) MemLock() MemLock {
+	return MemLock(ds >> memLockShift)
+}
+
+// MemTLB returns the recorded TLB access mode.
+func (ds DataSource) MemTLB() MemTLB {
+	return MemTLB(ds >> memTLBShift)
+}
 
 // MemOp is a memory operation.
 type MemOp uint8
 
-// Known memory operations.
-//
-// TODO(acln): add these to x/sys/unix?
+// MemOp flag bits.
 const (
 	MemOpNA MemOp = 1 << iota
 	MemOpLoad
@@ -1053,9 +1093,7 @@ const (
 // MemLevel is a memory level.
 type MemLevel uint32
 
-// Known memory levels.
-//
-// TODO(acln): add these to x/sys/unix?
+// MemLevel flag bits.
 const (
 	MemLevelNA MemLevel = 1 << iota
 	MemLevelHit
@@ -1075,14 +1113,20 @@ const (
 	memLevelShift = 5
 )
 
-const memRemoteShift = 37
+// MemRemote indicates whether remote memory was accessed.
+type MemRemote uint8
+
+// MemRemote flag bits.
+const (
+	MemRemoteRemote MemRemote = 1 << iota
+
+	memRemoteShift = 37
+)
 
 // MemLevelNumber is a memory level number.
 type MemLevelNumber uint8
 
-// Known memory level numbers.
-//
-// TODO(acln): add these to x/sys/unix?
+// MemLevelNumber flag bits.
 const (
 	MemLevelNumberL1 MemLevelNumber = iota
 	MemLevelNumberL2
@@ -1095,13 +1139,13 @@ const (
 	MemLevelNumberPMem
 	MemLevelNumberNA
 
-	memLevelNumShift = 33
+	memLevelNumberShift = 33
 )
 
 // MemSnoopMode is a memory snoop mode.
 type MemSnoopMode uint8
 
-// Known memory snoop modes.
+// MemSnoopMode flag bits.
 const (
 	MemSnoopModeNA MemSnoopMode = 1 << iota
 	MemSnoopModeNone
@@ -1109,10 +1153,45 @@ const (
 	MemSnoopModeMiss
 	MemSnoopModeHitModified
 
-	memShoopModeShift = 19
+	memSnoopModeShift = 19
 )
 
-// TODO: missing PERF_MEM_SNOOPX_*, PERF_MEM_LOCK_*, PERF_MEM_TLB_*
+// MemSnoopModeX is an extended memory snoop mode.
+type MemSnoopModeX uint8
+
+// MemSnoopModeX flag bits.
+const (
+	MemSnoopModeXForward MemSnoopModeX = 0x01 // forward
+
+	memSnoopModeXShift = 37
+)
+
+// MemLock is a memory locking mode.
+type MemLock uint8
+
+// MemLock flag bits.
+const (
+	MemLockNA     MemLock = 1 << iota // not available
+	MemLockLocked                     // locked transaction
+
+	memLockShift = 24
+)
+
+// MemTLB is a TLB access mode.
+type MemTLB uint8
+
+// MemTLB flag bits.
+const (
+	MemTLBNA   MemTLB = 1 << iota // not available
+	MemTLBHit                     // hit level
+	MemTLBMiss                    // miss level
+	MemTLBL1
+	MemTLBL2
+	MemTLBWK // Hardware Walker
+	MemTLBOS // OS fault handler
+
+	memTLBShift = 26
+)
 
 // Transaction describes a transactional memory abort.
 type Transaction uint64
