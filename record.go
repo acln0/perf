@@ -1035,6 +1035,60 @@ func (nr *NamespacesRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	f.id(&nr.RecordID, ev)
 }
 
+// Skid is an instruction pointer skid constraint.
+type Skid int
+
+// Supported Skid settings.
+const (
+	CanHaveArbitrarySkid Skid = 0
+	MustHaveConstantSkid Skid = 1
+	RequestedZeroSkid    Skid = 2
+	MustHaveZeroSkid     Skid = 3
+)
+
+// BranchSampleFormat specifies what branches to include in a branch record.
+type BranchSampleFormat struct {
+	Privilege BranchSamplePrivilege
+	Sample    BranchSample
+}
+
+func (b BranchSampleFormat) marshal() uint64 {
+	return uint64(b.Privilege) | uint64(b.Sample)
+}
+
+// BranchSamplePrivilege speifies a branch sample privilege level. If a
+// level is not set explicitly, the kernel will use the event's privilege
+// level. Event and branch privilege levels do not have to match.
+type BranchSamplePrivilege uint64
+
+// Branch sample privilege values. Values should be |-ed together.
+const (
+	BranchPrivilegeUser       BranchSamplePrivilege = unix.PERF_SAMPLE_BRANCH_USER
+	BranchPrivilegeKernel     BranchSamplePrivilege = unix.PERF_SAMPLE_BRANCH_KERNEL
+	BranchPrivilegeHypervisor BranchSamplePrivilege = unix.PERF_SAMPLE_BRANCH_HV
+)
+
+// BranchSample specifies a type of branch to sample.
+type BranchSample uint64
+
+// Branch sample bits. Values should be |-ed together.
+const (
+	BranchSampleAny              BranchSample = unix.PERF_SAMPLE_BRANCH_ANY
+	BranchSampleAnyCall          BranchSample = unix.PERF_SAMPLE_BRANCH_ANY_CALL
+	BranchSampleAnyReturn        BranchSample = unix.PERF_SAMPLE_BRANCH_ANY_RETURN
+	BranchSampleIndirectCall     BranchSample = unix.PERF_SAMPLE_BRANCH_IND_CALL
+	BranchSampleAbortTransaction BranchSample = unix.PERF_SAMPLE_BRANCH_ABORT_TX
+	BranchSampleInTransaction    BranchSample = unix.PERF_SAMPLE_BRANCH_IN_TX
+	BranchSampleNoTransaction    BranchSample = unix.PERF_SAMPLE_BRANCH_NO_TX
+	BranchSampleCond             BranchSample = unix.PERF_SAMPLE_BRANCH_COND
+	BranchSampleCallStack        BranchSample = unix.PERF_SAMPLE_BRANCH_CALL_STACK
+	BranchSampleIndirectJump     BranchSample = unix.PERF_SAMPLE_BRANCH_IND_JUMP
+	BranchSampleCall             BranchSample = unix.PERF_SAMPLE_BRANCH_CALL
+	BranchSampleNoFlags          BranchSample = unix.PERF_SAMPLE_BRANCH_NO_FLAGS
+	BranchSampleNoCycles         BranchSample = unix.PERF_SAMPLE_BRANCH_NO_CYCLES
+	BranchSampleSave             BranchSample = unix.PERF_SAMPLE_BRANCH_TYPE_SAVE
+)
+
 // DataSource records where in the memory hierarchy the data associated with
 // a sampled instruction came from.
 type DataSource uint64

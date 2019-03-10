@@ -778,16 +778,47 @@ func NewBreakpoint(typ BreakpointType, addr uint64, length BreakpointLength) *At
 	}
 }
 
-// TODO(acln): document this, add these constants, see ptrace.h.
+// BreakpointType is the type of a breakpoint.
 type BreakpointType uint32
 
-// TODO(acln): document this, add these constants, see ptrace.h.
+// Breakpoint types. Values are |-ed together. The combination of
+// BreakpointTypeR or BreakpointTypeW with BreakpointTypeX is invalid.
+//
+// TODO(acln): add these to x/sys/unix?
+const (
+	BreakpointTypeEmpty BreakpointType = 0x0
+	BreakpointTypeR     BreakpointType = 0x1
+	BreakpointTypeW     BreakpointType = 0x2
+	BreakpointTypeRW                   = BreakpointTypeR | BreakpointTypeW
+	BreakpointTypeX                    = 0x4
+)
+
+// BreakpointLength is the length of the breakpoint being measured.
 type BreakpointLength uint64
+
+// Breakpoint length values.
+//
+// TODO(acln): add these to x/sys/unix?
+const (
+	BreakpointLength1 BreakpointLength = 1
+	BreakpointLength2 BreakpointLength = 2
+	BreakpointLength4 BreakpointLength = 4
+	BreakpointLength8 BreakpointLength = 8
+)
+
+// ExecutionBreakpointLength returns the length of an execution breakpoint.
+//
+// TODO(acln): is this correct? The man page says to set this to sizeof(long).
+// Is sizeof(C long) == sizeof(Go uintptr) on all platforms of interest?
+func ExecutionBreakpointLength() BreakpointLength {
+	var x uintptr
+	return BreakpointLength(unsafe.Sizeof(x))
+}
 
 // NewExecutionBreakpoint returns an Event configured to record an execution
 // breakpoint at the specified address.
 func NewExecutionBreakpoint(addr uint64) *Attr {
-	panic("not implemented")
+	return NewBreakpoint(BreakpointTypeX, addr, ExecutionBreakpointLength())
 }
 
 // CountFormat configures the format of Count or GroupCount measurements.
@@ -921,57 +952,3 @@ func (opt Options) marshal() uint64 {
 	}
 	return marshalBitwiseUint64(fields)
 }
-
-// Skid is an instruction pointer skid constraint.
-type Skid int
-
-// Supported Skid settings.
-const (
-	CanHaveArbitrarySkid Skid = 0
-	MustHaveConstantSkid Skid = 1
-	RequestedZeroSkid    Skid = 2
-	MustHaveZeroSkid     Skid = 3
-)
-
-// BranchSampleFormat specifies what branches to include in a branch record.
-type BranchSampleFormat struct {
-	Privilege BranchSamplePrivilege
-	Sample    BranchSample
-}
-
-func (b BranchSampleFormat) marshal() uint64 {
-	return uint64(b.Privilege) | uint64(b.Sample)
-}
-
-// BranchSamplePrivilege speifies a branch sample privilege level. If a
-// level is not set explicitly, the kernel will use the event's privilege
-// level. Event and branch privilege levels do not have to match.
-type BranchSamplePrivilege uint64
-
-// Branch sample privilege values. Values should be |-ed together.
-const (
-	BranchPrivilegeUser       BranchSamplePrivilege = unix.PERF_SAMPLE_BRANCH_USER
-	BranchPrivilegeKernel     BranchSamplePrivilege = unix.PERF_SAMPLE_BRANCH_KERNEL
-	BranchPrivilegeHypervisor BranchSamplePrivilege = unix.PERF_SAMPLE_BRANCH_HV
-)
-
-// BranchSample specifies a type of branch to sample.
-type BranchSample uint64
-
-// Branch sample bits. Values should be |-ed together.
-const (
-	BranchSampleAny              BranchSample = unix.PERF_SAMPLE_BRANCH_ANY
-	BranchSampleAnyCall          BranchSample = unix.PERF_SAMPLE_BRANCH_ANY_CALL
-	BranchSampleAnyReturn        BranchSample = unix.PERF_SAMPLE_BRANCH_ANY_RETURN
-	BranchSampleIndirectCall     BranchSample = unix.PERF_SAMPLE_BRANCH_IND_CALL
-	BranchSampleAbortTransaction BranchSample = unix.PERF_SAMPLE_BRANCH_ABORT_TX
-	BranchSampleInTransaction    BranchSample = unix.PERF_SAMPLE_BRANCH_IN_TX
-	BranchSampleNoTransaction    BranchSample = unix.PERF_SAMPLE_BRANCH_NO_TX
-	BranchSampleCond             BranchSample = unix.PERF_SAMPLE_BRANCH_COND
-	BranchSampleCallStack        BranchSample = unix.PERF_SAMPLE_BRANCH_CALL_STACK
-	BranchSampleIndirectJump     BranchSample = unix.PERF_SAMPLE_BRANCH_IND_JUMP
-	BranchSampleCall             BranchSample = unix.PERF_SAMPLE_BRANCH_CALL
-	BranchSampleNoFlags          BranchSample = unix.PERF_SAMPLE_BRANCH_NO_FLAGS
-	BranchSampleNoCycles         BranchSample = unix.PERF_SAMPLE_BRANCH_NO_CYCLES
-	BranchSampleSave             BranchSample = unix.PERF_SAMPLE_BRANCH_TYPE_SAVE
-)
