@@ -17,13 +17,13 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-type tracepointTest struct {
+type singleTracepointTest struct {
 	category string
 	event    string
 	trigger  func() error
 }
 
-func (tt tracepointTest) run(t *testing.T) {
+func (tt singleTracepointTest) run(t *testing.T) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
@@ -55,12 +55,12 @@ func (tt tracepointTest) run(t *testing.T) {
 	}
 }
 
-func (tt tracepointTest) String() string {
+func (tt singleTracepointTest) String() string {
 	return tt.category + ":" + tt.event
 }
 
-func TestTracepoint(t *testing.T) {
-	tests := []tracepointTest{
+func TestSingleTracepoint(t *testing.T) {
+	tests := []singleTracepointTest{
 		{
 			category: "syscalls",
 			event:    "sys_enter_getpid",
