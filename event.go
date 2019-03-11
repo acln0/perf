@@ -147,6 +147,7 @@ func Open(attr *Attr, pid, cpu int, group *Event, flags Flag) (*Event, error) {
 		// TODO(acln): this is not quite right: fix the race somehow.
 		groupfd = group.fd
 	}
+
 	flags |= cloexec
 	fd, err := unix.PerfEventOpen(attr.sysAttr(), pid, cpu, groupfd, int(flags))
 	if err != nil {
@@ -156,6 +157,7 @@ func Open(attr *Attr, pid, cpu int, group *Event, flags Flag) (*Event, error) {
 		unix.Close(fd)
 		return nil, os.NewSyscallError("setnonblock", err)
 	}
+
 	attrClone := new(Attr)
 	*attrClone = *attr // ok to copy since no slices
 	if attrClone.Label == "" {
@@ -165,6 +167,7 @@ func Open(attr *Attr, pid, cpu int, group *Event, flags Flag) (*Event, error) {
 		}
 		attrClone.Label = lookupLabel(evID).Name
 	}
+
 	ev := &Event{
 		state: eventStateOK,
 		fd:    fd,
@@ -173,6 +176,7 @@ func Open(attr *Attr, pid, cpu int, group *Event, flags Flag) (*Event, error) {
 	if group != nil {
 		group.group = append(group.group, ev)
 	}
+
 	return ev, nil
 }
 
@@ -186,24 +190,32 @@ func (ev *Event) MapRing() error {
 	if ev.ring != nil {
 		return nil
 	}
+
 	size := (1 + numRingPages) * unix.Getpagesize()
-	ring, err := unix.Mmap(ev.fd, 0, size, unix.PROT_READ|unix.PROT_WRITE, unix.MAP_SHARED)
+	const prot = unix.PROT_READ | unix.PROT_WRITE
+	const flags = unix.MAP_SHARED
+	ring, err := unix.Mmap(ev.fd, 0, size, prot, flags)
 	if err != nil {
 		return os.NewSyscallError("mmap", err)
 	}
+
 	meta := (*unix.PerfEventMmapPage)(unsafe.Pointer(&ring[0]))
 	ringdata := ring[meta.Data_offset:]
+
 	evfd, err := unix.Eventfd(0, unix.EFD_CLOEXEC|unix.EFD_NONBLOCK)
 	if err != nil {
 		return os.NewSyscallError("eventfd", err)
 	}
+
 	ev.ring = ring
 	ev.meta = meta
 	ev.ringdata = ringdata
 	ev.evfd = evfd
 	ev.pollreq = make(chan pollreq)
 	ev.pollresp = make(chan pollresp)
+
 	go ev.poll()
+
 	return nil
 }
 
@@ -211,6 +223,7 @@ func (ev *Event) ok() error {
 	if ev == nil {
 		return os.ErrInvalid
 	}
+
 	switch ev.state {
 	case eventStateUninitialized:
 		return os.ErrInvalid
@@ -233,7 +246,9 @@ func (ev *Event) Measure(f func()) (Count, error) {
 	if err := ev.Enable(); err != nil {
 		return Count{}, err
 	}
+
 	f()
+
 	if err := ev.Disable(); err != nil {
 		return Count{}, err
 	}
@@ -251,7 +266,9 @@ func (ev *Event) MeasureGroup(f func()) (GroupCount, error) {
 	if err := ev.Enable(); err != nil {
 		return GroupCount{}, err
 	}
+
 	f()
+
 	if err := ev.Disable(); err != nil {
 		return GroupCount{}, err
 	}
@@ -274,7 +291,7 @@ func (ev *Event) Disable() error {
 	return ioctlDisable(ev.fd)
 }
 
-// TODO(acln): support (*Event).Refresh and the POLLHUP machinery?
+// BUG(acln): (*Event).Refresh is broken, because we do not deal with POLLHUP
 
 // Reset resets the counters associated with the event.
 func (ev *Event) Reset() error {
@@ -310,7 +327,7 @@ func (ev *Event) SetOutput(target *Event) error {
 	return ioctlSetOutput(ev.fd, target.fd)
 }
 
-// TODO(acln): (*Event).SetFtraceFilter
+// BUG(acln): (*Event).SetFtraceFilter is not implemented
 
 // ID returns the unique event ID value for ev.
 func (ev *Event) ID() (uint64, error) {
@@ -367,7 +384,7 @@ func (ev *Event) ModifyAttributes(attr Attr) error {
 
 type errWriter struct {
 	w   io.Writer
-	err error
+	err error // sticky
 }
 
 func (ew *errWriter) Write(b []byte) (int, error) {
@@ -424,15 +441,18 @@ func (ev *Event) ReadCount() (Count, error) {
 	if ev.attr.CountFormat.Group {
 		return c, errors.New("calling ReadCount on group Event")
 	}
+
 	// TODO(acln): use rdpmc on x86 instead of read(2)?
 	buf := make([]byte, ev.attr.CountFormat.readSize())
 	_, err := unix.Read(ev.fd, buf)
 	if err != nil {
 		return c, os.NewSyscallError("read", err)
 	}
+
 	f := fields(buf)
 	f.count(&c, ev)
 	c.Label = ev.attr.Label
+
 	return c, err
 }
 
@@ -462,13 +482,16 @@ func (gc GroupCount) PrintTo(w io.Writer) error {
 	if len(gc.Values) == 0 {
 		return ew.err
 	}
+
 	tw := new(tabwriter.Writer)
 	tw.Init(w, 0, 8, 1, ' ', 0)
+
 	if gc.Values[0].ID != 0 {
 		fmt.Fprintln(tw, "label\tvalue\tID")
 	} else {
 		fmt.Fprintln(tw, "label\tvalue")
 	}
+
 	for _, v := range gc.Values {
 		if v.ID != 0 {
 			fmt.Fprintf(tw, "%s\t%d\t%d\n", v.Label, v.Value, v.ID)
@@ -476,6 +499,7 @@ func (gc GroupCount) PrintTo(w io.Writer) error {
 			fmt.Fprintf(tw, "%s\t%d\n", v.Label, v.Value)
 		}
 	}
+
 	tw.Flush()
 	return ew.err
 }
@@ -490,6 +514,7 @@ func (ev *Event) ReadGroupCount() (GroupCount, error) {
 	if !ev.attr.CountFormat.Group {
 		return gc, errors.New("calling ReadGroupCount on non-group Event")
 	}
+
 	headerSize := ev.attr.CountFormat.groupReadHeaderSize()
 	countsSize := (1 + len(ev.group)) * ev.attr.CountFormat.groupReadCountSize()
 	buf := make([]byte, headerSize+countsSize)
@@ -497,12 +522,14 @@ func (ev *Event) ReadGroupCount() (GroupCount, error) {
 	if err != nil {
 		return gc, os.NewSyscallError("read", err)
 	}
+
 	f := fields(buf)
 	f.groupCount(&gc, ev)
 	gc.Values[0].Label = ev.attr.Label
 	for i := 0; i < len(ev.group); i++ {
 		gc.Values[i+1].Label = ev.group[i].attr.Label
 	}
+
 	return gc, nil
 }
 
@@ -515,9 +542,11 @@ func (ev *Event) Close() error {
 		unix.Munmap(ev.ring)
 		unix.Close(ev.evfd)
 	}
+
 	for _, ev := range ev.owned {
 		ev.Close()
 	}
+
 	ev.state = eventStateClosed
 	return unix.Close(ev.fd)
 }
@@ -891,9 +920,11 @@ func Tracepoint(category, event string) Configurator {
 		if err != nil {
 			return err
 		}
+
 		attr.Label = fmt.Sprintf("%s:%s", category, event)
 		attr.Type = TracepointEvent
 		attr.Config = cfg
+
 		return nil
 	})
 }
@@ -929,6 +960,7 @@ func Breakpoint(typ BreakpointType, addr uint64, length BreakpointLength) Config
 		attr.BreakpointType = uint32(typ)
 		attr.Config1 = addr
 		attr.Config2 = uint64(length)
+
 		return nil
 	})
 }
@@ -1198,6 +1230,7 @@ func (opt Options) marshal() uint64 {
 		opt.Namespaces,
 	}
 	val := marshalBitwiseUint64(fields)
+
 	const (
 		skidlsb = 15
 		skidmsb = 16
@@ -1208,6 +1241,7 @@ func (opt Options) marshal() uint64 {
 	if opt.PreciseIP&0x10 != 0 {
 		val |= 1 << skidmsb
 	}
+
 	return val
 }
 
@@ -1242,6 +1276,7 @@ func lookupLabel(id eventID) eventLabel {
 }
 
 func lookupLabelInSysfs(id eventID) eventLabel {
-	// TODO(acln): implement
 	return eventLabel{}
 }
+
+// BUG(acln): generic Attr.Label lookup is not implemented

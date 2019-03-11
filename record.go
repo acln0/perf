@@ -52,11 +52,13 @@ func (ev *Event) ReadRawRecord(ctx context.Context, raw *RawRecord) error {
 	if ev.ring == nil {
 		return errors.New("perf: event ring not mapped")
 	}
+
 	// Fast path: try reading from the ring buffer first. If there is
 	// a record there, we are done.
 	if ev.readRawRecordNonblock(raw) {
 		return nil
 	}
+
 	// If the context has a deadline, and that deadline is in the future,
 	// use it to compute a timeout for ppoll(2). If the context is
 	// expired, bail out. Otherwise, the timeout is zero, which means
@@ -70,6 +72,7 @@ func (ev *Event) ReadRawRecord(ctx context.Context, raw *RawRecord) error {
 			return ctx.Err()
 		}
 	}
+
 	// Start a round of polling, then await results. Only one request
 	// can be in flight at a time, and the whole request-response cycle
 	// is owned by the current invocation of ReadRawRecord.
@@ -88,6 +91,7 @@ func (ev *Event) ReadRawRecord(ctx context.Context, raw *RawRecord) error {
 			active = true
 		}
 		<-ev.pollresp
+
 		// We don't know if doPoll woke up due to our active wakeup
 		// or because it timed out. It doesn't make a difference.
 		// The important detail here is that doPoll does not touch
@@ -176,6 +180,7 @@ func (ev *Event) doPoll(req pollreq) pollresp {
 			Nsec: int64(nsec),
 		}
 	}
+
 	pollfds := []unix.PollFd{
 		{Fd: int32(ev.fd), Events: unix.POLLIN},
 		{Fd: int32(ev.evfd), Events: unix.POLLIN},
@@ -186,6 +191,7 @@ again:
 	if err == unix.EINTR {
 		goto again
 	}
+
 	// If we are here and we have successfully woken up, it is for one
 	// of three reasons: we got POLLIN on ev.fd, the ppoll(2) timeout
 	// fired, or we got POLLIN on ev.evfd.
