@@ -10,13 +10,13 @@ A Group represents a set of perf events measured together.
 	var g perf.Group
 	g.Add(perf.Instructions, perf.CPUCycles)
 
-	ev, err := g.Open(target, perf.AnyCPU)
+	hw, err := g.Open(targetpid, perf.AnyCPU)
 	// ...
-	gc, err := ev.MeasureGroup(func() { ... })
+	gc, err := hw.MeasureGroup(func() { ... })
 
 Attr is a low level configuration structure:
 
-	attr := &perf.Attr{
+	fattr := &perf.Attr{
 		Type:   perf.SoftwareEvent,
 		Config: uint64(perf.PageFaults),
 		CountFormat: perf.CountFormat{
@@ -25,14 +25,14 @@ Attr is a low level configuration structure:
 		},
 	}
 
-	ev, err := perf.Open(attr, perf.CallingThread, perf.AnyCPU, nil, 0)
+	faults, err := perf.Open(fattr, perf.CallingThread, perf.AnyCPU, nil, 0)
 	// ...
-	c, err := ev.Measure(func() { ... })
+	c, err := faults.Measure(func() { ... })
 
 Overflow records are available once the MapRing method on
 Event is called:
 
-	var ev perf.Event // initialized
+	var ev perf.Event // initialized previously
 	ev.MapRing()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
@@ -42,6 +42,23 @@ Event is called:
 		rec, err := ev.ReadRecord(ctx)
 		// ...
 	}
+
+Tracepoints are also supported:
+
+	wattr := &perf.Attr{
+		Sample: 1,
+		RecordFormat: perf.RecordFormat{
+			Pid: true,
+			Tid: true,
+			IP:  true,
+		},
+	}
+	writetp := perf.Tracepoint("syscalls", "sys_enter_write")
+	writetp.Configure(wattr)
+
+	writes, err := perf.Open(wattr, targetpid, perf.AnyCPU, nil, 0)
+	// ...
+	c, err := writes.Measure(func() { ... })
 
 For more detailed information, see the examples, and man 2 perf_event_open.
 */
