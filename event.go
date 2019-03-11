@@ -848,6 +848,7 @@ func Tracepoint(category, event string) Configurator {
 		if err != nil {
 			return err
 		}
+		attr.Label = fmt.Sprintf("%s:%s", category, event)
 		attr.Type = TracepointEvent
 		attr.Config = cfg
 		return nil

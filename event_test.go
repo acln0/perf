@@ -39,20 +39,16 @@ func (tt singleTracepointTest) run(t *testing.T) {
 	}
 	defer ev.Close()
 
-	const hits = 5 // TODO(acln): don't hard code, perhaps
-
 	count, err := ev.Measure(func() {
-		for i := 0; i < hits; i++ {
-			if err := tt.trigger(); err != nil {
-				t.Fatalf("trigger: %v", err)
-			}
+		if err := tt.trigger(); err != nil {
+			t.Fatalf("trigger: %v", err)
 		}
 	})
 	if err != nil {
 		t.Fatalf("Measure: %v", err)
 	}
-	if count.Value != hits {
-		t.Fatalf("got %d %s hits, want %d", count.Value, tt.String(), hits)
+	if count.Value != 1 {
+		t.Fatalf("got %d hits for %q, want 1 hit", count.Value, count.Label)
 	}
 }
 
@@ -81,7 +77,6 @@ func TestSingleTracepoint(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.String(), tt.run)
 	}
-
 }
 
 func getpidTrigger() error {
