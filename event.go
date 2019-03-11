@@ -524,7 +524,19 @@ func (ev *Event) Close() error {
 
 // Attr configures a perf event.
 type Attr struct {
-	// TODO(acln): document
+	// Label is a human readable label associated with the event.
+	// For convenience, the Label is included in Count and GroupCount
+	// measurements read from events.
+	//
+	// When an event is opened, if Label is the empty string, then a
+	// Label is computed (if possible) based on the Type and Config
+	// fields. Otherwise, if the Label user-defined (not the empty
+	// string), it is included verbatim.
+	//
+	// For most events, the computed Label matches the label specified by
+	// ``perf list'' for the same event.
+	//
+	// TODO(acln): make that last statement true.
 	Label string
 
 	// Type is the major type of the event.
