@@ -91,7 +91,6 @@ func (g *Group) Open(pid int, cpu int) (*Event, error) {
 			return nil, fmt.Errorf("perf: failed to map leader ring: %v", err)
 		}
 	}
-	// TODO(acln): figure out IOC_SET_OUTPUT and how to route samples to leader
 	for idx, attr := range g.attrs[1:] {
 		follower, err := Open(attr, pid, cpu, leader, 0)
 		if err != nil {
