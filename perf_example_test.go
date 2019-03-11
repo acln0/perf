@@ -33,7 +33,7 @@ func ExampleEvent_Measure_hardware() {
 
 	sum := 0
 
-	count, err := ev.Measure(func() {
+	c, err := ev.Measure(func() {
 		for i := 0; i < 1000000; i++ {
 			sum += i
 		}
@@ -42,7 +42,7 @@ func ExampleEvent_Measure_hardware() {
 		log.Fatal(err)
 	}
 
-	fmt.Printf("got sum %d in %d CPU cycles (%v)", sum, count.Value, count.Running)
+	fmt.Printf("got sum %d in %d CPU cycles (%v)", sum, c.Value, c.Running)
 }
 
 func ExampleEvent_Measure_tracepoint() {
@@ -63,7 +63,7 @@ func ExampleEvent_Measure_tracepoint() {
 
 	unix.Getpid() // does not count towards the measurement
 
-	count, err := ev.Measure(func() {
+	c, err := ev.Measure(func() {
 		unix.Getpid()
 		unix.Getpid()
 		unix.Getpid()
@@ -72,6 +72,32 @@ func ExampleEvent_Measure_tracepoint() {
 		log.Fatal(err)
 	}
 
-	fmt.Printf("saw getpid(2) %d times", count.Value)
+	fmt.Printf("saw getpid(2) %d times", c.Value)
 	// Output: saw getpid(2) 3 times
+}
+
+func ExampleEvent_MeasureGroup_hardware() {
+	var g perf.Group
+	g.Add(perf.Instructions, perf.CPUCycles)
+
+	ev, err := g.Open(perf.CallingThread, perf.AnyCPU)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer ev.Close()
+
+	sum := 0
+
+	gc, err := ev.MeasureGroup(func() {
+		for i := 0; i < 1000000; i++ {
+			sum += i
+		}
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	instructions := gc.Values[0].Value
+	cycles := gc.Values[1].Value
+	fmt.Printf("got sum %d in %d instructions and %d CPU cycles", sum, instructions, cycles)
 }
