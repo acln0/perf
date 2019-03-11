@@ -15,12 +15,14 @@ import (
 )
 
 func ExampleEvent_Measure_tracepoint() {
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-
 	getpidattr := new(perf.Attr)
 	getpid := perf.Tracepoint("syscalls", "sys_enter_getpid")
-	getpid.Configure(getpidattr)
+	if err := getpid.Configure(getpidattr); err != nil {
+		log.Fatal(err)
+	}
+
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 
 	ev, err := perf.Open(getpidattr, perf.CallingThread, perf.AnyCPU, nil, 0)
 	if err != nil {
