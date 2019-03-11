@@ -18,8 +18,8 @@ func TestGroup(t *testing.T) {
 
 	g := perf.Group{
 		CountFormat: perf.CountFormat{
-			TotalTimeEnabled: true,
-			TotalTimeRunning: true,
+			Enabled: true,
+			Running: true,
 		},
 	}
 	g.Add(perf.CPUCycles, perf.Instructions)

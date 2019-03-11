@@ -17,7 +17,7 @@ import (
 func ExampleEvent_Measure_hardware() {
 	cyclesattr := &perf.Attr{
 		CountFormat: perf.CountFormat{
-			TotalTimeRunning: true,
+			Running: true,
 		},
 	}
 	perf.CPUCycles.Configure(cyclesattr)
@@ -42,7 +42,7 @@ func ExampleEvent_Measure_hardware() {
 		log.Fatal(err)
 	}
 
-	fmt.Printf("got sum %d in %d CPU cycles (%v)", sum, count.Value, count.TimeRunning)
+	fmt.Printf("got sum %d in %d CPU cycles (%v)", sum, count.Value, count.Running)
 }
 
 func ExampleEvent_Measure_tracepoint() {

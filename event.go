@@ -388,11 +388,11 @@ func (ew *errWriter) Write(b []byte) (int, error) {
 //
 // TODO(acln): document Label
 type Count struct {
-	Value       uint64
-	TimeEnabled time.Duration
-	TimeRunning time.Duration
-	ID          uint64
-	Label       string
+	Value   uint64
+	Enabled time.Duration
+	Running time.Duration
+	ID      uint64
+	Label   string
 }
 
 // PrintTo pretty prints a Count to w.
@@ -402,11 +402,11 @@ func (c Count) PrintTo(w io.Writer) error {
 		fmt.Fprintf(ew, "%s: ", c.Label)
 	}
 	fmt.Fprintf(ew, "%d", c.Value)
-	if c.TimeEnabled != 0 {
-		fmt.Fprintf(ew, " enabled = %v", c.TimeEnabled)
+	if c.Enabled != 0 {
+		fmt.Fprintf(ew, " enabled = %v", c.Enabled)
 	}
-	if c.TimeRunning != 0 {
-		fmt.Fprintf(ew, " running = %v", c.TimeRunning)
+	if c.Running != 0 {
+		fmt.Fprintf(ew, " running = %v", c.Running)
 	}
 	if c.ID != 0 {
 		fmt.Fprintf(ew, " id = %d", c.ID)
@@ -978,18 +978,18 @@ func ExecutionBreakpoint(addr uint64) Configurator {
 // If Group is set, callers must use ReadGroupCount on the associated Event.
 // Otherwise, they must use ReadCount.
 type CountFormat struct {
-	TotalTimeEnabled bool
-	TotalTimeRunning bool
-	ID               bool
-	Group            bool
+	Enabled bool
+	Running bool
+	ID      bool
+	Group   bool
 }
 
 func (f CountFormat) readSize() int {
 	size := 8 // value is always set
-	if f.TotalTimeEnabled {
+	if f.Enabled {
 		size += 8
 	}
-	if f.TotalTimeRunning {
+	if f.Running {
 		size += 8
 	}
 	if f.ID {
@@ -1000,10 +1000,10 @@ func (f CountFormat) readSize() int {
 
 func (f CountFormat) groupReadHeaderSize() int {
 	size := 8 // number of events is always set
-	if f.TotalTimeEnabled {
+	if f.Enabled {
 		size += 8
 	}
-	if f.TotalTimeRunning {
+	if f.Running {
 		size += 8
 	}
 	return size
@@ -1021,8 +1021,8 @@ func (f CountFormat) groupReadCountSize() int {
 func (f CountFormat) marshal() uint64 {
 	// Always keep this in sync with the type definition above.
 	fields := []bool{
-		f.TotalTimeEnabled,
-		f.TotalTimeRunning,
+		f.Enabled,
+		f.Running,
 		f.ID,
 		f.Group,
 	}

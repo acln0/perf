@@ -114,10 +114,10 @@ func TestSumIPC(t *testing.T) {
 	insns := new(perf.Attr)
 	perf.Instructions.Configure(insns)
 	insns.CountFormat = perf.CountFormat{
-		TotalTimeEnabled: true,
-		TotalTimeRunning: true,
-		Group:            true,
-		ID:               true,
+		Enabled: true,
+		Running: true,
+		Group:   true,
+		ID:      true,
 	}
 	insns.Options = perf.Options{
 		Disabled: true,
@@ -186,9 +186,9 @@ func TestSumOverhead(t *testing.T) {
 	attr := new(perf.Attr)
 	perf.Instructions.Configure(attr)
 	attr.CountFormat = perf.CountFormat{
-		TotalTimeEnabled: true,
-		TotalTimeRunning: true,
-		ID:               true,
+		Enabled: true,
+		Running: true,
+		ID:      true,
 	}
 	attr.Options = perf.Options{
 		Disabled: true,
@@ -231,7 +231,7 @@ func TestSumOverhead(t *testing.T) {
 			got:      count.Value,
 			ideal:    ideal,
 			overhead: float64(count.Value) / float64(ideal),
-			running:  count.TimeRunning,
+			running:  count.Running,
 		}
 		_ = o // TODO(acln): find a way to test these values
 	}

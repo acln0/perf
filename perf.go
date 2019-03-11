@@ -92,11 +92,11 @@ func (f *fields) id(id *RecordID, ev *Event) {
 // count decodes a Count into c.
 func (f *fields) count(c *Count, ev *Event) {
 	f.uint64(&c.Value)
-	if ev.attr.CountFormat.TotalTimeEnabled {
-		f.duration(&c.TimeEnabled)
+	if ev.attr.CountFormat.Enabled {
+		f.duration(&c.Enabled)
 	}
-	if ev.attr.CountFormat.TotalTimeRunning {
-		f.duration(&c.TimeRunning)
+	if ev.attr.CountFormat.Running {
+		f.duration(&c.Running)
 	}
 	f.uint64Cond(ev.attr.CountFormat.ID, &c.ID)
 }
@@ -105,10 +105,10 @@ func (f *fields) count(c *Count, ev *Event) {
 func (f *fields) groupCount(gc *GroupCount, ev *Event) {
 	var nr uint64
 	f.uint64(&nr)
-	if ev.attr.CountFormat.TotalTimeEnabled {
+	if ev.attr.CountFormat.Enabled {
 		f.duration(&gc.TimeEnabled)
 	}
-	if ev.attr.CountFormat.TotalTimeRunning {
+	if ev.attr.CountFormat.Running {
 		f.duration(&gc.TimeRunning)
 	}
 	gc.Values = make([]struct {

@@ -193,8 +193,8 @@ func TestGroupRecordRedirect(t *testing.T) {
 
 	g := perf.Group{
 		CountFormat: perf.CountFormat{
-			TotalTimeEnabled: true,
-			TotalTimeRunning: true,
+			Enabled: true,
+			Running: true,
 		},
 	}
 	g.AddAttr(getpidattr, writeattr)
