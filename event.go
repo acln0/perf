@@ -539,9 +539,9 @@ type Attr struct {
 	// interpreted as "sample period".
 	Sample uint64
 
-	// RecordFormat configures the format for overflow packets read from
-	// the ring buffer associated with the event.
-	RecordFormat RecordFormat
+	// SampleFormat configures information requested in sample records,
+	// on the memory mapped ring buffer.
+	SampleFormat SampleFormat
 
 	// CountFormat specifies the format of counts read from the
 	// Event using ReadCount or ReadGroupCount. See the CountFormat
@@ -579,8 +579,8 @@ type Attr struct {
 	// branch record, if SampleFormat.BranchStack is set.
 	BranchSampleFormat BranchSampleFormat
 
-	// SampleRegsUser is the set of user registers to dump on samples.
-	SampleRegsUser uint64
+	// SampleRegistersUser is the set of user registers to dump on samples.
+	SampleRegistersUser uint64
 
 	// SampleStackUser is the size of the user stack to  dump on samples.
 	SampleStackUser uint32
@@ -589,9 +589,9 @@ type Attr struct {
 	// is set.
 	ClockID int32
 
-	// SampleRegsIntr is the set of register to dump for each sample.
+	// SampleRegistersIntr is the set of register to dump for each sample.
 	// See asm/perf_regs.h for details.
-	SampleRegsIntr uint64
+	SampleRegistersIntr uint64
 
 	// AuxWatermark is the watermark for the aux area.
 	AuxWatermark uint32
@@ -607,7 +607,7 @@ func (a Attr) sysAttr() *unix.PerfEventAttr {
 		Size:               uint32(unsafe.Sizeof(unix.PerfEventAttr{})),
 		Config:             a.Config,
 		Sample:             a.Sample,
-		Sample_type:        a.RecordFormat.marshal(),
+		Sample_type:        a.SampleFormat.marshal(),
 		Read_format:        a.CountFormat.marshal(),
 		Bits:               a.Options.marshal(),
 		Wakeup:             a.Wakeup,
@@ -615,10 +615,10 @@ func (a Attr) sysAttr() *unix.PerfEventAttr {
 		Ext1:               a.Config1,
 		Ext2:               a.Config2,
 		Branch_sample_type: a.BranchSampleFormat.marshal(),
-		Sample_regs_user:   a.SampleRegsUser,
+		Sample_regs_user:   a.SampleRegistersUser,
 		Sample_stack_user:  a.SampleStackUser,
 		Clockid:            a.ClockID,
-		Sample_regs_intr:   a.SampleRegsIntr,
+		Sample_regs_intr:   a.SampleRegistersIntr,
 		Aux_watermark:      a.AuxWatermark,
 		Sample_max_stack:   a.SampleMaxStack,
 	}
@@ -886,8 +886,9 @@ func Tracepoint(category, event string) Configurator {
 	})
 }
 
-// LookupTracepointConfig probes /sys/kernel/debug/tracing/events/<category>/<event>/id
-// for the Attr.Config value associated with the specified category and event.
+// LookupTracepointConfig probes
+// /sys/kernel/debug/tracing/events/<category>/<event>/id for the Attr.Config
+// value associated with the specified category and event.
 func LookupTracepointConfig(category, event string) (uint64, error) {
 	f := filepath.Join("/sys/kernel/debug/tracing/events", category, event, "id")
 	content, err := ioutil.ReadFile(f)
@@ -908,7 +909,8 @@ func LookupTracepointConfig(category, event string) (uint64, error) {
 //
 // length is the length of the breakpoint being measured.
 //
-// The returned Configurator sets the attr.Type, attr.BreakpointType, attr.Config1 and attr.Config2 fields.
+// The returned Configurator sets the Type, BreakpointType, Config1, and
+// Config2 fields on attr.
 func Breakpoint(typ BreakpointType, addr uint64, length BreakpointLength) Configurator {
 	return configuratorFunc(func(attr *Attr) error {
 		attr.Type = BreakpointEvent
@@ -965,18 +967,16 @@ func ExecutionBreakpoint(addr uint64) Configurator {
 
 // CountFormat configures the format of Count or GroupCount measurements.
 //
-// TotalTimeEnabled and TotalTimeRunning configure the Event to include time
-// enabled and time running measurements to the counts. Usually, these two
-// values are equal. They may differ when events are multiplexed.
-// TODO(acln): elaborate, see also time_shift and time_mul on the mmap meta page
+// Enabled and Running configure the Event to include time enabled and
+// time running measurements to the counts. Usually, these two values are
+// equal. They may differ when events are multiplexed.
 //
-// If ID is set, a unique ID is assigned to the associated event.
+// If ID is set, a unique ID is assigned to the associated event. For a
+// given event, this ID matches the ID reported by the (*Event).ID method.
 //
-// TODO(acln): mention that the returned ID is the same as what we get
-// from the ID method / ioctl (after verifying using tests).
-//
-// If Group is set, callers must use ReadGroupCount on the associated Event.
-// Otherwise, they must use ReadCount.
+// If Group is set, the Event measures a group of events together: callers
+// must use ReadGroupCount. If Group is not set, the Event measures a single
+// counter: callers must use ReadCount.
 type CountFormat struct {
 	Enabled bool
 	Running bool
@@ -1029,7 +1029,7 @@ func (f CountFormat) marshal() uint64 {
 	return marshalBitwiseUint64(fields)
 }
 
-// Options contains low level event options.
+// Options contains low level event configuration options.
 type Options struct {
 	// Disabled disables the event by default. If the event is in a
 	// group, but not a group leader, this option has no effect, since
@@ -1147,7 +1147,7 @@ type Options struct {
 
 	// writeBackward configures the kernel to write to the memory
 	// mapped ring buffer backwards. This option is not supported by
-	// this package.
+	// package perf at the moment.
 	writeBackward bool
 
 	// Namespaces enables the generation of NamespacesRecord records.

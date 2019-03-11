@@ -23,7 +23,7 @@ func TestRecordGetpid(t *testing.T) {
 		t.Fatalf("Configure: %v", err)
 	}
 	attr.Sample = 1
-	attr.RecordFormat = perf.RecordFormat{
+	attr.SampleFormat = perf.SampleFormat{
 		Tid:  true,
 		Time: true,
 		CPU:  true,
@@ -79,7 +79,7 @@ func TestRecordRedirectManualWire(t *testing.T) {
 	attr.Sample = 1
 	attr.Options.Disabled = true
 	attr.Wakeup = 1
-	attr.RecordFormat = perf.RecordFormat{
+	attr.SampleFormat = perf.SampleFormat{
 		Tid:  true,
 		Time: true,
 		CPU:  true,
@@ -105,7 +105,7 @@ func TestRecordRedirectManualWire(t *testing.T) {
 	}
 	attr.Sample = 1
 	attr.Wakeup = 1
-	attr.RecordFormat = perf.RecordFormat{
+	attr.SampleFormat = perf.SampleFormat{
 		Tid:  true,
 		Time: true,
 		CPU:  true,
@@ -164,7 +164,7 @@ func TestGroupRecordRedirect(t *testing.T) {
 		Options: perf.Options{
 			Disabled: true,
 		},
-		RecordFormat: perf.RecordFormat{
+		SampleFormat: perf.SampleFormat{
 			Tid:  true,
 			Time: true,
 			CPU:  true,
@@ -179,7 +179,7 @@ func TestGroupRecordRedirect(t *testing.T) {
 	writeattr := &perf.Attr{
 		Sample: 1,
 		Wakeup: 1,
-		RecordFormat: perf.RecordFormat{
+		SampleFormat: perf.SampleFormat{
 			Tid:  true,
 			Time: true,
 			CPU:  true,
