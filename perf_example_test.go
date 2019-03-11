@@ -29,6 +29,8 @@ func ExampleEvent_Measure_tracepoint() {
 		log.Fatal(err)
 	}
 
+	unix.Getpid() // does not count towards the measurement
+
 	count, err := ev.Measure(func() {
 		unix.Getpid()
 		unix.Getpid()
