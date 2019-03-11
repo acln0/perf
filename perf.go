@@ -2,7 +2,49 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package perf provides access to the Linux perf API. See man 2 perf_event_open.
+/*
+Package perf provides access to the Linux perf API.
+
+A Group represents a set of perf events measured together.
+
+	var g perf.Group
+	g.Add(perf.Instructions, perf.CPUCycles)
+
+	ev, err := g.Open(target, perf.AnyCPU)
+	// ...
+	gc, err := ev.MeasureGroup(func() { ... })
+
+Attr is a low level configuration structure:
+
+	attr := &perf.Attr{
+		Type:   perf.SoftwareEvent,
+		Config: uint64(perf.PageFaults),
+		CountFormat: perf.CountFormat{
+			Running: true,
+			ID:      true,
+		},
+	}
+
+	ev, err := perf.Open(attr, perf.CallingThread, perf.AnyCPU, nil, 0)
+	// ...
+	c, err := ev.Measure(func() { ... })
+
+Overflow records are available once the MapRing method on
+Event is called:
+
+	var ev perf.Event // initialized
+	ev.MapRing()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	for {
+		rec, err := ev.ReadRecord(ctx)
+		// ...
+	}
+
+For more detailed information, see the examples, and man 2 perf_event_open.
+*/
 package perf
 
 import (
