@@ -13,7 +13,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func Example_Event_Measure_tracepoint() {
+func ExampleEvent_Measure_tracepoint() {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
