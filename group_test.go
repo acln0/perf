@@ -18,11 +18,11 @@ func TestGroup(t *testing.T) {
 
 	g := perf.Group{
 		CountFormat: perf.CountFormat{
+			TotalTimeEnabled: true,
 			TotalTimeRunning: true,
-			ID:               true,
 		},
 	}
-	g.Add(perf.Instructions, perf.CPUCycles, perf.BranchInstructions, perf.BranchMisses)
+	g.Add(perf.CPUCycles, perf.Instructions)
 	ev, err := g.Open(perf.CallingThread, perf.AnyCPU)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -33,5 +33,5 @@ func TestGroup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MeasureGroup: %v", err)
 	}
-	t.Logf("%+v\n", counts)
+	t.Log(counts)
 }

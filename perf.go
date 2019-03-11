@@ -111,10 +111,13 @@ func (f *fields) groupCount(gc *GroupCount, ev *Event) {
 	if ev.attr.CountFormat.TotalTimeRunning {
 		f.duration(&gc.TimeRunning)
 	}
-	gc.Counts = make([]struct{ Value, ID uint64 }, nr)
+	gc.Values = make([]struct {
+		Value, ID uint64
+		Label     string
+	}, nr)
 	for i := 0; i < int(nr); i++ {
-		f.uint64(&gc.Counts[i].Value)
-		f.uint64Cond(ev.attr.CountFormat.ID, &gc.Counts[i].ID)
+		f.uint64(&gc.Values[i].Value)
+		f.uint64Cond(ev.attr.CountFormat.ID, &gc.Values[i].ID)
 	}
 }
 

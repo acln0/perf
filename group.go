@@ -70,7 +70,7 @@ func (g *Group) Open(pid int, cpu int) (*Event, error) {
 		ev, err := Open(attr, pid, cpu, leader, 0)
 		if err != nil {
 			leader.Close()
-			return nil, fmt.Errorf("perf: failed to open child event #%d: %v", idx, err)
+			return nil, fmt.Errorf("perf: failed to open group event #%d (%q): %v", idx, attr.Label, err)
 		}
 		leader.owned = append(leader.owned, ev)
 	}

@@ -6,11 +6,14 @@ package perf
 
 import (
 	"errors"
+	"fmt"
 	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"text/tabwriter"
 	"time"
 	"unsafe"
 
@@ -167,6 +170,13 @@ func Open(attr *Attr, pid, cpu int, group *Event, flags Flag) (*Event, error) {
 	}
 	attrClone := new(Attr)
 	*attrClone = *attr // ok to copy since no slices
+	if attrClone.Label == "" {
+		evID := eventID{
+			Type:   uint64(attr.Type),
+			Config: uint64(attr.Config),
+		}
+		attrClone.Label = lookupLabel(evID).Name
+	}
 	ev := &Event{
 		state:    eventStateOK,
 		fd:       fd,
@@ -349,11 +359,32 @@ func (ev *Event) ModifyAttributes(attr Attr) error {
 //
 // The TimeEnabled field is populated if ReadFormat.TimeEnabled is set on
 // the Event the Count was read from. Ditto for TimeRunning and ID.
+//
+// TODO(acln): document Label
 type Count struct {
 	Value       uint64
 	TimeEnabled time.Duration
 	TimeRunning time.Duration
 	ID          uint64
+	Label       string
+}
+
+func (c Count) String() string {
+	sb := new(strings.Builder)
+	if c.Label != "" {
+		fmt.Fprintf(sb, "%s: ", c.Label)
+	}
+	fmt.Fprintf(sb, "%d", c.Value)
+	if c.TimeEnabled != 0 {
+		fmt.Fprintf(sb, " enabled = %v", c.TimeEnabled)
+	}
+	if c.TimeRunning != 0 {
+		fmt.Fprintf(sb, " running = %v", c.TimeRunning)
+	}
+	if c.ID != 0 {
+		fmt.Fprintf(sb, " id = %d", c.ID)
+	}
+	return sb.String()
 }
 
 // ReadCount reads the measurement associated with ev. If the Event was
@@ -374,19 +405,50 @@ func (ev *Event) ReadCount() (Count, error) {
 	}
 	f := fields(buf)
 	f.count(&c, ev)
+	c.Label = ev.attr.Label
 	return c, err
 }
 
 // GroupCount is a group of measurements taken by an Event group.
 //
 // Fields are populated as described in the Count documentation.
+//
+// TODO(acln): document Label
 type GroupCount struct {
 	TimeEnabled time.Duration
 	TimeRunning time.Duration
-	Counts      []struct {
+	Values      []struct {
 		Value uint64
 		ID    uint64
+		Label string
 	}
+}
+
+func (gc GroupCount) String() string {
+	sb := new(strings.Builder)
+	fmt.Fprint(sb, "\n")
+	if gc.TimeEnabled != 0 {
+		fmt.Fprintf(sb, "time enabled: %v\n", gc.TimeEnabled)
+	}
+	if gc.TimeRunning != 0 {
+		fmt.Fprintf(sb, "time running: %v\n", gc.TimeRunning)
+	}
+	tw := new(tabwriter.Writer)
+	tw.Init(sb, 0, 8, 1, ' ', 0)
+	if gc.Values[0].ID != 0 {
+		fmt.Fprintln(tw, "label\tvalue\tID")
+	} else {
+		fmt.Fprintln(tw, "label\tvalue")
+	}
+	for _, v := range gc.Values {
+		if v.ID != 0 {
+			fmt.Fprintf(tw, "%s\t%d\t%d\n", v.Label, v.Value, v.ID)
+		} else {
+			fmt.Fprintf(tw, "%s\t%d\n", v.Label, v.Value)
+		}
+	}
+	tw.Flush()
+	return sb.String()
 }
 
 // ReadGroupCount reads the measurements associated with ev. If the Event
@@ -408,6 +470,10 @@ func (ev *Event) ReadGroupCount() (GroupCount, error) {
 	}
 	f := fields(buf)
 	f.groupCount(&gc, ev)
+	gc.Values[0].Label = ev.attr.Label
+	for i := 0; i < len(ev.group); i++ {
+		gc.Values[i+1].Label = ev.group[i].attr.Label
+	}
 	return gc, nil
 }
 
@@ -427,6 +493,9 @@ func (ev *Event) Close() error {
 
 // Attr configures a perf event.
 type Attr struct {
+	// TODO(acln): document
+	Label string
+
 	// Type is the major type of the event.
 	Type EventType
 
@@ -586,11 +655,27 @@ const (
 	RefCPUCycles          HardwareCounter = unix.PERF_COUNT_HW_REF_CPU_CYCLES
 )
 
-// TODO(acln): figure out how to get at these:
-// https://github.com/golang/go/issues/21295#issuecomment-335519282
+var hardwareLabels = map[HardwareCounter]eventLabel{
+	CPUCycles:             {Name: "cpu-cycles", Alias: "cycles"},
+	Instructions:          {Name: "instructions"},
+	CacheReferences:       {Name: "cache-references"},
+	CacheMisses:           {Name: "cache-misses"},
+	BranchInstructions:    {Name: "branch-instructions", Alias: "branches"},
+	BranchMisses:          {Name: "branch-misses", Alias: "branch-misses"},
+	BusCycles:             {Name: "bus-cycles"},
+	StalledCyclesFrontend: {Name: "stalled-cycles-frontend", Alias: "idle-cycles-frontend"},
+	StalledCyclesBackend:  {Name: "stalled-cycles-backend", Alias: "idle-cycles-backend"},
+	RefCPUCycles:          {Name: "ref-cycles"},
+}
 
-// Configure configures attr to measure hwc. It sets attr.Type and attr.Config.
+func (hwc HardwareCounter) eventLabel() eventLabel {
+	return hardwareLabels[hwc]
+}
+
+// Configure configures attr to measure hwc. It sets the Label, Type, and
+// Config fields on attr.
 func (hwc HardwareCounter) Configure(attr *Attr) error {
+	attr.Label = hwc.eventLabel().Name
 	attr.Type = HardwareEvent
 	attr.Config = uint64(hwc)
 	return nil
@@ -630,8 +715,27 @@ const (
 	BPFOutput       SoftwareCounter = unix.PERF_COUNT_SW_BPF_OUTPUT
 )
 
+var softwareLabels = map[SoftwareCounter]eventLabel{
+	CPUClock:        {Name: "cpu-clock"},
+	TaskClock:       {Name: "task-clock"},
+	PageFaults:      {Name: "page-faults", Alias: "faults"},
+	ContextSwitches: {Name: "context-switches", Alias: "cs"},
+	CPUMigrations:   {Name: "cpu-migrations", Alias: "migrations"},
+	MinorPageFaults: {Name: "minor-faults"},
+	MajorPageFaults: {Name: "major-faults"},
+	AlignmentFaults: {Name: "alignment-faults"},
+	EmulationFaults: {Name: "emulation-faults"},
+	Dummy:           {Name: "dummy"},
+	BPFOutput:       {Name: "bpf-output"},
+}
+
+func (swc SoftwareCounter) eventLabel() eventLabel {
+	return softwareLabels[swc]
+}
+
 // Configure configures attr to measure swc. It sets attr.Type and attr.Config.
 func (swc SoftwareCounter) Configure(attr *Attr) error {
+	attr.Label = swc.eventLabel().Name
 	attr.Type = SoftwareEvent
 	attr.Config = uint64(swc)
 	return nil
@@ -1061,4 +1165,39 @@ func (opt Options) marshal() uint64 {
 		val |= 1 << skidmsb
 	}
 	return val
+}
+
+type eventLabel struct {
+	Name, Alias string
+}
+
+func (el eventLabel) String() string {
+	if el.Name == "" {
+		return "unknown"
+	}
+	if el.Alias != "" {
+		return fmt.Sprintf("%s OR %s", el.Name, el.Alias)
+	}
+	return el.Name
+}
+
+type eventID struct {
+	Type, Config uint64
+}
+
+var eventLabels sync.Map // of eventID to eventLabel
+
+func lookupLabel(id eventID) eventLabel {
+	v, ok := eventLabels.Load(id)
+	if ok {
+		return v.(eventLabel)
+	}
+	label := lookupLabelInSysfs(id)
+	eventLabels.Store(id, label)
+	return label
+}
+
+func lookupLabelInSysfs(id eventID) eventLabel {
+	// TODO(acln): implement
+	return eventLabel{}
 }

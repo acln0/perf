@@ -162,8 +162,8 @@ func TestSumIPC(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ReadGroupCount: %v", err)
 		}
-		instructions := counts.Counts[0].Value
-		cycles := counts.Counts[1].Value
+		instructions := counts.Values[0].Value
+		cycles := counts.Values[1].Value
 		ipc := sumIPC{
 			N:            N,
 			instructions: instructions,
