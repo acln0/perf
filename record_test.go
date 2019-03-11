@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"acln.ro/perf"
+
+	"golang.org/x/sys/unix"
 )
 
 func TestRecordGetpid(t *testing.T) {
@@ -236,5 +238,100 @@ func TestGroupRecordRedirect(t *testing.T) {
 	writeip := writerec.(*perf.SampleGroupRecord).IP
 	if getpidip == writeip {
 		t.Fatalf("suspicious equal instruction pointers 0x%x for samples", getpidip)
+	}
+}
+
+func TestRecordStack(t *testing.T) {
+	getpidattr := &perf.Attr{
+		Sample: 1,
+		Wakeup: 1,
+		Options: perf.Options{
+			Disabled: true,
+		},
+		SampleFormat: perf.SampleFormat{
+			Tid:       true,
+			Time:      true,
+			CPU:       true,
+			IP:        true,
+			Callchain: true,
+		},
+	}
+	getpidtp := perf.Tracepoint("syscalls", "sys_enter_getpid")
+	if err := getpidtp.Configure(getpidattr); err != nil {
+		t.Fatal(err)
+	}
+
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	ev, err := perf.Open(getpidattr, perf.CallingThread, perf.AnyCPU, nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ev.Close()
+
+	if err := ev.MapRing(); err != nil {
+		t.Fatal(err)
+	}
+
+	pcs := make([]uintptr, 10)
+	var n int
+
+	c, err := ev.Measure(func() {
+		n = runtime.Callers(2, pcs)
+		unix.Getpid()
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Value != 1 {
+		t.Fatalf("want 1 hit for %q, got %d", c.Label, c.Value)
+	}
+
+	pcs = pcs[:n]
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	rec, err := ev.ReadRecord(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	getpidsample := rec.(*perf.SampleRecord)
+
+	t.Log("sampled callchain:")
+	for _, pc := range getpidsample.Callchain {
+		fn := runtime.FuncForPC(uintptr(pc))
+		if fn == nil {
+			t.Logf("%#x: <nil>\n", pc)
+		} else {
+			file, line := fn.FileLine(uintptr(pc))
+			t.Logf("%#x: %s:%d %s\n", pc, file, line, fn.Name())
+		}
+	}
+
+	t.Log()
+
+	t.Log("Go PCs:")
+	for _, pc := range pcs {
+		fn := runtime.FuncForPC(pc)
+		if fn == nil {
+			t.Logf("%#x: <nil>\n", pc)
+		} else {
+			file, line := fn.FileLine(pc)
+			t.Logf("%#x: %s:%d %s\n", pc, file, line, fn.Name())
+		}
+	}
+
+	i := len(pcs) - 1
+	j := len(getpidsample.Callchain) - 1
+
+	for i >= 0 && j >= 0 {
+		gopc := pcs[i]
+		kpc := getpidsample.Callchain[j]
+		if gopc != uintptr(kpc) {
+			t.Fatalf("Go (%#x) and kernel (%#x) PC differ", gopc, kpc)
+		}
+		i--
+		j--
 	}
 }
