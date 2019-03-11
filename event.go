@@ -291,7 +291,7 @@ func (ev *Event) Disable() error {
 	return ioctlDisable(ev.fd)
 }
 
-// BUG(acln): (*Event).Refresh is broken, because we do not deal with POLLHUP
+// BUG(acln): (*Event).Refresh is not implemented, because we do not deal with POLLHUP in the poll goroutine yet
 
 // Reset resets the counters associated with the event.
 func (ev *Event) Reset() error {
@@ -563,9 +563,7 @@ type Attr struct {
 	// string), it is included verbatim.
 	//
 	// For most events, the computed Label matches the label specified by
-	// ``perf list'' for the same event.
-	//
-	// TODO(acln): make that last statement true.
+	// ``perf list'' for the same event (but see BUGS).
 	Label string
 
 	// Type is the major type of the event.

@@ -23,11 +23,6 @@ func ioctlDisable(fd int) error {
 	return wrapIoctlError("PERF_EVENT_IOC_DISABLE", err)
 }
 
-func ioctlRefresh(fd int) error {
-	err := ioctlNoArg(fd, unix.PERF_EVENT_IOC_REFRESH)
-	return wrapIoctlError("PERF_EVENT_IOC_REFRESH", err)
-}
-
 func ioctlReset(fd int) error {
 	err := ioctlNoArg(fd, unix.PERF_EVENT_IOC_RESET)
 	return wrapIoctlError("PERF_EVENT_IOC_RESET", err)
