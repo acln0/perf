@@ -310,10 +310,21 @@ func (ev *Event) UpdatePeriod(p uint64) error {
 	return ioctlPeriod(ev.fd, &p)
 }
 
-// SetOutput tells the kernel to report event notifications to the specified
-// target Event rather than ev. ev and target must be on the same CPU.
+// SetOutput tells the kernel to send records to the specified
+// target Event rather than ev.
 //
 // If target is nil, output from ev is ignored.
+//
+// Some restrictions apply:
+//
+// * calling SetOutput on an *Event will fail with EINVAL if MapRing was
+// called on that event previously
+//
+// * if ev and target are not CPU-wide events, they must be on the same CPU
+//
+// * if ev and target are CPU-wide events, they must refer to the same task
+//
+// * ev and target must use the same clock
 func (ev *Event) SetOutput(target *Event) error {
 	if err := ev.ok(); err != nil {
 		return err
