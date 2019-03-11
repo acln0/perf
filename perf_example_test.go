@@ -14,6 +14,37 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+func ExampleEvent_Measure_hardware() {
+	cyclesattr := &perf.Attr{
+		CountFormat: perf.CountFormat{
+			TotalTimeRunning: true,
+		},
+	}
+	perf.CPUCycles.Configure(cyclesattr)
+
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	ev, err := perf.Open(cyclesattr, perf.CallingThread, perf.AnyCPU, nil, 0)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer ev.Close()
+
+	sum := 0
+
+	count, err := ev.Measure(func() {
+		for i := 0; i < 1000000; i++ {
+			sum += i
+		}
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Printf("got sum %d in %d CPU cycles (%v)", sum, count.Value, count.TimeRunning)
+}
+
 func ExampleEvent_Measure_tracepoint() {
 	getpidattr := new(perf.Attr)
 	getpid := perf.Tracepoint("syscalls", "sys_enter_getpid")
@@ -28,6 +59,7 @@ func ExampleEvent_Measure_tracepoint() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	defer ev.Close()
 
 	unix.Getpid() // does not count towards the measurement
 
