@@ -80,6 +80,9 @@ func ExampleEvent_MeasureGroup_hardware() {
 	var g perf.Group
 	g.Add(perf.Instructions, perf.CPUCycles)
 
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
 	ev, err := g.Open(perf.CallingThread, perf.AnyCPU)
 	if err != nil {
 		log.Fatal(err)
