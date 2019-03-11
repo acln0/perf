@@ -97,7 +97,7 @@ func ExampleEvent_MeasureGroup_hardware() {
 		log.Fatal(err)
 	}
 
-	instructions := gc.Values[0].Value
+	insns := gc.Values[0].Value
 	cycles := gc.Values[1].Value
-	fmt.Printf("got sum %d in %d instructions and %d CPU cycles", sum, instructions, cycles)
+	fmt.Printf("got sum %d in %d instructions and %d CPU cycles", sum, insns, cycles)
 }
