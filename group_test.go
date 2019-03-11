@@ -23,6 +23,13 @@ func TestGroup(t *testing.T) {
 		},
 	}
 	g.Add(perf.CPUCycles, perf.Instructions)
+
+	dummy := new(perf.Attr)
+	perf.Dummy.Configure(dummy)
+	dummy.Sample = 1
+
+	g.AddAttr(dummy)
+
 	ev, err := g.Open(perf.CallingThread, perf.AnyCPU)
 	if err != nil {
 		t.Fatalf("Open: %v", err)

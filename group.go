@@ -44,10 +44,19 @@ func (g *Group) add(cfg Configurator) {
 		g.err = err
 		return
 	}
+	g.AddAttr(attr)
+}
+
+// AddAttr adds attr to the event group, unchanged.
+func (g *Group) AddAttr(attr *Attr) {
 	g.attrs = append(g.attrs, attr)
 }
 
 // Open opens all the events in the group, and returns their leader.
+//
+// The returned Event controls the entire group. Callers must use the
+// ReadGroupCount method when reading counters from it. Closing it closes
+// the entire group.
 func (g *Group) Open(pid int, cpu int) (*Event, error) {
 	if len(g.attrs) == 0 {
 		return nil, errors.New("perf: empty event group")
@@ -65,7 +74,7 @@ func (g *Group) Open(pid int, cpu int) (*Event, error) {
 	if len(g.attrs) < 2 {
 		return leader, nil
 	}
-	// TODO(acln): figure out how to re-route samples to leader
+	// TODO(acln): figure out IOC_SET_OUTPUT and how to route samples to leader
 	for idx, attr := range g.attrs[1:] {
 		ev, err := Open(attr, pid, cpu, leader, 0)
 		if err != nil {
