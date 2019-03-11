@@ -18,8 +18,9 @@ type Group struct {
 	// Options configures options for all events in the group.
 	Options Options
 
-	err   error // sticky configuration error
-	attrs []*Attr
+	err             error // sticky configuration error
+	attrs           []*Attr
+	leaderNeedsRing bool
 }
 
 // Add adds events to the group, as configured by cfgs.
@@ -44,11 +45,22 @@ func (g *Group) add(cfg Configurator) {
 		g.err = err
 		return
 	}
-	g.AddAttr(attr)
+	g.addAttr(attr)
 }
 
 // AddAttr adds attr to the event group, unchanged.
-func (g *Group) AddAttr(attr *Attr) {
+func (g *Group) AddAttr(attrs ...*Attr) {
+	for _, attr := range attrs {
+		attrClone := new(Attr)
+		*attrClone = *attr
+		g.addAttr(attrClone)
+	}
+}
+
+func (g *Group) addAttr(attr *Attr) {
+	if attr.Sample != 0 {
+		g.leaderNeedsRing = true
+	}
 	g.attrs = append(g.attrs, attr)
 }
 
@@ -74,14 +86,25 @@ func (g *Group) Open(pid int, cpu int) (*Event, error) {
 	if len(g.attrs) < 2 {
 		return leader, nil
 	}
+	if g.leaderNeedsRing {
+		if err := leader.MapRing(); err != nil {
+			return nil, fmt.Errorf("perf: failed to map leader ring: %v", err)
+		}
+	}
 	// TODO(acln): figure out IOC_SET_OUTPUT and how to route samples to leader
 	for idx, attr := range g.attrs[1:] {
-		ev, err := Open(attr, pid, cpu, leader, 0)
+		follower, err := Open(attr, pid, cpu, leader, 0)
 		if err != nil {
 			leader.Close()
 			return nil, fmt.Errorf("perf: failed to open group event #%d (%q): %v", idx, attr.Label, err)
 		}
-		leader.owned = append(leader.owned, ev)
+		leader.owned = append(leader.owned, follower)
+		if attr.Sample != 0 {
+			if err := follower.SetOutput(leader); err != nil {
+				leader.Close()
+				return nil, fmt.Errorf("perf: failed to route follower %q output to leader %q (pid %d on CPU %d)", attr.Label, leaderattr.Label, pid, cpu)
+			}
+		}
 	}
 	return leader, nil
 }

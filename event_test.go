@@ -166,7 +166,7 @@ func TestSumIPC(t *testing.T) {
 			ipc:          float64(instructions) / float64(cycles),
 			running:      counts.TimeRunning,
 		}
-		t.Log(ipc)
+		_ = ipc // TODO(acln): find a way to test these values
 	}
 }
 
@@ -233,7 +233,7 @@ func TestSumOverhead(t *testing.T) {
 			overhead: float64(count.Value) / float64(ideal),
 			running:  count.TimeRunning,
 		}
-		t.Log(o)
+		_ = o // TODO(acln): find a way to test these values
 	}
 }
 

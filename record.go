@@ -6,6 +6,7 @@ package perf
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/bits"
 	"os"
@@ -47,6 +48,9 @@ func (ev *Event) ReadRecord(ctx context.Context) (Record, error) {
 func (ev *Event) ReadRawRecord(ctx context.Context, raw *RawRecord) error {
 	if err := ev.ok(); err != nil {
 		return err
+	}
+	if ev.ring == nil {
+		return errors.New("perf: event ring not mapped")
 	}
 	// Fast path: try reading from the ring buffer first. If there is
 	// a record there, we are done.

@@ -7,6 +7,7 @@ package perf
 import (
 	"errors"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -155,19 +156,6 @@ func Open(attr *Attr, pid, cpu int, group *Event, flags Flag) (*Event, error) {
 		unix.Close(fd)
 		return nil, os.NewSyscallError("setnonblock", err)
 	}
-	size := (1 + numRingPages) * unix.Getpagesize()
-	ring, err := unix.Mmap(fd, 0, size, unix.PROT_READ|unix.PROT_WRITE, unix.MAP_SHARED)
-	if err != nil {
-		unix.Close(fd)
-		return nil, os.NewSyscallError("mmap", err)
-	}
-	meta := (*unix.PerfEventMmapPage)(unsafe.Pointer(&ring[0]))
-	ringdata := ring[meta.Data_offset:]
-	evfd, err := unix.Eventfd(0, unix.EFD_CLOEXEC|unix.EFD_NONBLOCK)
-	if err != nil {
-		unix.Close(fd)
-		return nil, os.NewSyscallError("eventfd", err)
-	}
 	attrClone := new(Attr)
 	*attrClone = *attr // ok to copy since no slices
 	if attrClone.Label == "" {
@@ -178,21 +166,45 @@ func Open(attr *Attr, pid, cpu int, group *Event, flags Flag) (*Event, error) {
 		attrClone.Label = lookupLabel(evID).Name
 	}
 	ev := &Event{
-		state:    eventStateOK,
-		fd:       fd,
-		attr:     attrClone,
-		ring:     ring,
-		ringdata: ringdata,
-		meta:     meta,
-		evfd:     evfd,
-		pollreq:  make(chan pollreq),
-		pollresp: make(chan pollresp),
+		state: eventStateOK,
+		fd:    fd,
+		attr:  attrClone,
 	}
 	if group != nil {
 		group.group = append(group.group, ev)
 	}
-	go ev.poll() // TODO(acln): start this lazily somehow?
 	return ev, nil
+}
+
+// MapRing maps the ring buffer attached to the event into memory.
+//
+// This enables reading records via ReadRecord / ReadRawRecord.
+func (ev *Event) MapRing() error {
+	if err := ev.ok(); err != nil {
+		return err
+	}
+	if ev.ring != nil {
+		return nil
+	}
+	size := (1 + numRingPages) * unix.Getpagesize()
+	ring, err := unix.Mmap(ev.fd, 0, size, unix.PROT_READ|unix.PROT_WRITE, unix.MAP_SHARED)
+	if err != nil {
+		return os.NewSyscallError("mmap", err)
+	}
+	meta := (*unix.PerfEventMmapPage)(unsafe.Pointer(&ring[0]))
+	ringdata := ring[meta.Data_offset:]
+	evfd, err := unix.Eventfd(0, unix.EFD_CLOEXEC|unix.EFD_NONBLOCK)
+	if err != nil {
+		return os.NewSyscallError("eventfd", err)
+	}
+	ev.ring = ring
+	ev.meta = meta
+	ev.ringdata = ringdata
+	ev.evfd = evfd
+	ev.pollreq = make(chan pollreq)
+	ev.pollresp = make(chan pollresp)
+	go ev.poll()
+	return nil
 }
 
 func (ev *Event) ok() error {
@@ -353,6 +365,20 @@ func (ev *Event) ModifyAttributes(attr Attr) error {
 	return ioctlModifyAttributes(ev.fd, attr.sysAttr())
 }
 
+type errWriter struct {
+	w   io.Writer
+	err error
+}
+
+func (ew *errWriter) Write(b []byte) (int, error) {
+	if ew.err != nil {
+		return 0, ew.err
+	}
+	n, err := ew.w.Write(b)
+	ew.err = err
+	return n, err
+}
+
 // Count is a measurement taken by an Event.
 //
 // The Value field is always present and populated.
@@ -369,22 +395,23 @@ type Count struct {
 	Label       string
 }
 
-func (c Count) String() string {
-	sb := new(strings.Builder)
+// PrintTo pretty prints a Count to w.
+func (c Count) PrintTo(w io.Writer) error {
+	ew := &errWriter{w: w}
 	if c.Label != "" {
-		fmt.Fprintf(sb, "%s: ", c.Label)
+		fmt.Fprintf(ew, "%s: ", c.Label)
 	}
-	fmt.Fprintf(sb, "%d", c.Value)
+	fmt.Fprintf(ew, "%d", c.Value)
 	if c.TimeEnabled != 0 {
-		fmt.Fprintf(sb, " enabled = %v", c.TimeEnabled)
+		fmt.Fprintf(ew, " enabled = %v", c.TimeEnabled)
 	}
 	if c.TimeRunning != 0 {
-		fmt.Fprintf(sb, " running = %v", c.TimeRunning)
+		fmt.Fprintf(ew, " running = %v", c.TimeRunning)
 	}
 	if c.ID != 0 {
-		fmt.Fprintf(sb, " id = %d", c.ID)
+		fmt.Fprintf(ew, " id = %d", c.ID)
 	}
-	return sb.String()
+	return ew.err
 }
 
 // ReadCount reads the measurement associated with ev. If the Event was
@@ -424,17 +451,19 @@ type GroupCount struct {
 	}
 }
 
-func (gc GroupCount) String() string {
-	sb := new(strings.Builder)
-	fmt.Fprint(sb, "\n")
+func (gc GroupCount) PrintTo(w io.Writer) error {
+	ew := &errWriter{w: w}
 	if gc.TimeEnabled != 0 {
-		fmt.Fprintf(sb, "time enabled: %v\n", gc.TimeEnabled)
+		fmt.Fprintf(ew, "time enabled: %v\n", gc.TimeEnabled)
 	}
 	if gc.TimeRunning != 0 {
-		fmt.Fprintf(sb, "time running: %v\n", gc.TimeRunning)
+		fmt.Fprintf(ew, "time running: %v\n", gc.TimeRunning)
+	}
+	if len(gc.Values) == 0 {
+		return ew.err
 	}
 	tw := new(tabwriter.Writer)
-	tw.Init(sb, 0, 8, 1, ' ', 0)
+	tw.Init(w, 0, 8, 1, ' ', 0)
 	if gc.Values[0].ID != 0 {
 		fmt.Fprintln(tw, "label\tvalue\tID")
 	} else {
@@ -448,7 +477,7 @@ func (gc GroupCount) String() string {
 		}
 	}
 	tw.Flush()
-	return sb.String()
+	return ew.err
 }
 
 // ReadGroupCount reads the measurements associated with ev. If the Event
@@ -480,14 +509,16 @@ func (ev *Event) ReadGroupCount() (GroupCount, error) {
 // Close closes the event. Close must not be called concurrently with any
 // other methods on the Event.
 func (ev *Event) Close() error {
+	if ev.ring != nil {
+		close(ev.pollreq)
+		<-ev.pollresp
+		unix.Munmap(ev.ring)
+		unix.Close(ev.evfd)
+	}
 	for _, ev := range ev.owned {
 		ev.Close()
 	}
 	ev.state = eventStateClosed
-	close(ev.pollreq)
-	<-ev.pollresp
-	unix.Munmap(ev.ring)
-	unix.Close(ev.evfd)
 	return unix.Close(ev.fd)
 }
 

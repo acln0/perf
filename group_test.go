@@ -40,5 +40,5 @@ func TestGroup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MeasureGroup: %v", err)
 	}
-	t.Log(counts)
+	_ = counts // TODO(acln): find a way to write a test for these
 }

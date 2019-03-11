@@ -13,7 +13,7 @@ import (
 	"acln.ro/perf"
 )
 
-func TestSampleGetpid(t *testing.T) {
+func TestRecordGetpid(t *testing.T) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
@@ -34,6 +34,9 @@ func TestSampleGetpid(t *testing.T) {
 		t.Fatalf("Open: %v", err)
 	}
 	defer ev.Close()
+	if err := ev.MapRing(); err != nil {
+		t.Fatalf("MapRing: %v", err)
+	}
 
 	type result struct {
 		rec perf.Record
@@ -61,14 +64,10 @@ func TestSampleGetpid(t *testing.T) {
 	if res.err != nil {
 		t.Fatalf("did not get record: %v", res.err)
 	}
-	t.Logf("got record %#v", res.rec)
-	t.Logf("CPU mode: %v", res.rec.Header().CPUMode())
+	_ = res.rec // TODO(acln): find a way to write a test for this
 }
 
-/*
-TODO(acln): fix and enable when I actually understand PERF_EVENT_IOC_SET_OUTPUT
-
-func TestSampleRedirectManualWire(t *testing.T) {
+func TestRecordRedirectManualWire(t *testing.T) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
@@ -95,6 +94,10 @@ func TestSampleRedirectManualWire(t *testing.T) {
 	}
 	defer leader.Close()
 
+	if err := leader.MapRing(); err != nil {
+		t.Fatalf("MapRing: %v", err)
+	}
+
 	write := perf.Tracepoint("syscalls", "sys_enter_write")
 	attr = new(perf.Attr)
 	if err := write.Configure(attr); err != nil {
@@ -108,11 +111,15 @@ func TestSampleRedirectManualWire(t *testing.T) {
 		CPU:  true,
 		Addr: true,
 	}
-	ev, err := perf.Open(attr, perf.CallingThread, perf.AnyCPU, leader, 0)
+	follower, err := perf.Open(attr, perf.CallingThread, perf.AnyCPU, leader, 0)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	defer ev.Close()
+	defer follower.Close()
+
+	if err := follower.SetOutput(leader); err != nil {
+		t.Fatalf("SetOutput: %v", err)
+	}
 
 	type result struct {
 		rec perf.Record
@@ -123,7 +130,7 @@ func TestSampleRedirectManualWire(t *testing.T) {
 		for i := 0; i < 2; i++ {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 			defer cancel()
-			rec, err := ev.ReadRecord(ctx)
+			rec, err := leader.ReadRecord(ctx)
 			ch <- result{rec, err}
 		}
 	}()
@@ -146,9 +153,88 @@ func TestSampleRedirectManualWire(t *testing.T) {
 		if res.err != nil {
 			t.Fatalf("did not get record: %v", res.err)
 		}
-		t.Logf("got record %#v", res.rec)
-		t.Logf("CPU mode: %v", res.rec.Header().CPUMode())
+		_ = res.rec // TODO(acln): find a way to write a test for these
 	}
 }
 
-*/
+func TestGroupRecordRedirect(t *testing.T) {
+	getpidattr := &perf.Attr{
+		Sample: 1,
+		Wakeup: 1,
+		Options: perf.Options{
+			Disabled: true,
+		},
+		RecordFormat: perf.RecordFormat{
+			Tid:  true,
+			Time: true,
+			CPU:  true,
+			IP:   true,
+		},
+	}
+	getpidtp := perf.Tracepoint("syscalls", "sys_enter_getpid")
+	if err := getpidtp.Configure(getpidattr); err != nil {
+		t.Fatal(err)
+	}
+
+	writeattr := &perf.Attr{
+		Sample: 1,
+		Wakeup: 1,
+		RecordFormat: perf.RecordFormat{
+			Tid:  true,
+			Time: true,
+			CPU:  true,
+			IP:   true,
+		},
+	}
+	writetp := perf.Tracepoint("syscalls", "sys_enter_write")
+	if err := writetp.Configure(writeattr); err != nil {
+		t.Fatal(err)
+	}
+
+	g := perf.Group{
+		CountFormat: perf.CountFormat{
+			TotalTimeEnabled: true,
+			TotalTimeRunning: true,
+		},
+	}
+	g.AddAttr(getpidattr, writeattr)
+
+	ev, err := g.Open(perf.CallingThread, perf.AnyCPU)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ev.Close()
+
+	counts, err := ev.MeasureGroup(func() {
+		if err := getpidTrigger(); err != nil {
+			t.Fatal(err)
+		}
+		if err := writeTrigger(); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range counts.Values {
+		if v.Value != 1 {
+			t.Fatalf("want 1 hit for %q, got %d", v.Label, v.Value)
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	getpidrec, err := ev.ReadRecord(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writerec, err := ev.ReadRecord(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	getpidip := getpidrec.(*perf.SampleGroupRecord).IP
+	writeip := writerec.(*perf.SampleGroupRecord).IP
+	if getpidip == writeip {
+		t.Fatalf("suspicious equal instruction pointers 0x%x for samples", getpidip)
+	}
+}
