@@ -5,6 +5,7 @@
 package perf_test
 
 import (
+	"fmt"
 	"log"
 	"runtime"
 
@@ -35,5 +36,6 @@ func ExampleEvent_Measure_tracepoint() {
 		log.Fatal(err)
 	}
 
-	log.Printf("saw getpid(2) %d times", count.Value)
+	fmt.Printf("saw getpid(2) %d times", count.Value)
+	// Output: saw getpid(2) 3 times
 }
