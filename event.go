@@ -100,7 +100,7 @@ type Event struct {
 	epollfd int
 
 	// evfd is an event file descriptor (see eventfd(2)): it is used to
-	// unblock calls to ppoll(2) on the perf fd.
+	// unblock calls to ReadRawRecord when the context expires.
 	evfd int
 
 	// pollreq communicates requests from ReadRawRecord to the poll goroutine

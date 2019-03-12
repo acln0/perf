@@ -60,9 +60,11 @@ func (ev *Event) ReadRawRecord(ctx context.Context, raw *RawRecord) error {
 	}
 
 	// If the context has a deadline, and that deadline is in the future,
-	// use it to compute a timeout for ppoll(2). If the context is
+	// use it to compute a timeout for epoll_wait(2). If the context is
 	// expired, bail out. Otherwise, the timeout is zero, which means
 	// no timeout.
+	//
+	// BUG(acln): <1ms timeouts are not handled gracefully at all
 	var timeout time.Duration
 	deadline, ok := ctx.Deadline()
 	if ok {
@@ -112,7 +114,8 @@ func (ev *Event) ReadRawRecord(ctx context.Context, raw *RawRecord) error {
 		if !resp.perfready {
 			// Here, we have not touched ev.evfd, there
 			// was no polling error, and ev.perffd is not
-			// ready. Therefore, ppoll(2) must have timed out.
+			// ready. Therefore, epoll_wait(2) must have timed
+			// out.
 			//
 			// The reason we are here is the following: doPoll
 			// woke up, and immediately sent us a pollresp, which
@@ -207,7 +210,7 @@ again:
 }
 
 type pollreq struct {
-	// timeout is the timeout for ppoll(2): zero means no timeout
+	// timeout is the timeout for epoll_wait(2): zero means no timeout
 	timeout time.Duration
 }
 
@@ -215,7 +218,7 @@ type pollresp struct {
 	// perfready indicates if the perf FD (ev.perffd) is ready.
 	perfready bool
 
-	// err is the *os.SyscallError from ppoll(2).
+	// err is the *os.SyscallError from epoll_wait(2).
 	err error
 }
 
