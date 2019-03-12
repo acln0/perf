@@ -134,7 +134,7 @@ func TestConcurrentSampling(t *testing.T) {
 
 	ga.Sample = 1
 	ga.SampleFormat.Tid = true
-	ga.Wakeup = 1
+	ga.Wakeup = 10
 
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
