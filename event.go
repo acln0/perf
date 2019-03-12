@@ -67,6 +67,7 @@ const (
 	eventStateClosed        = 2
 )
 
+// Event is an active perf event.
 type Event struct {
 	// state is the state of the event. See eventState* constants.
 	state int32
@@ -764,6 +765,10 @@ var hardwareLabels = map[HardwareCounter]eventLabel{
 	RefCPUCycles:          {Name: "ref-cycles"},
 }
 
+func (hwc HardwareCounter) String() string {
+	return hwc.eventLabel().Name
+}
+
 func (hwc HardwareCounter) eventLabel() eventLabel {
 	return hardwareLabels[hwc]
 }
@@ -771,7 +776,7 @@ func (hwc HardwareCounter) eventLabel() eventLabel {
 // Configure configures attr to measure hwc. It sets the Label, Type, and
 // Config fields on attr.
 func (hwc HardwareCounter) Configure(attr *Attr) error {
-	attr.Label = hwc.eventLabel().Name
+	attr.Label = hwc.String()
 	attr.Type = HardwareEvent
 	attr.Config = uint64(hwc)
 	return nil
@@ -823,6 +828,10 @@ var softwareLabels = map[SoftwareCounter]eventLabel{
 	EmulationFaults: {Name: "emulation-faults"},
 	Dummy:           {Name: "dummy"},
 	BPFOutput:       {Name: "bpf-output"},
+}
+
+func (swc SoftwareCounter) String() string {
+	return swc.eventLabel().Name
 }
 
 func (swc SoftwareCounter) eventLabel() eventLabel {
