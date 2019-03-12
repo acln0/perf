@@ -15,6 +15,69 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+func TestPollTimeout(t *testing.T) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	getpid := perf.Tracepoint("syscalls", "sys_enter_getpid")
+	attr := new(perf.Attr)
+	if err := getpid.Configure(attr); err != nil {
+		t.Fatal(err)
+	}
+
+	attr.Sample = 1
+	attr.SampleFormat.Tid = true
+
+	ev, err := perf.Open(attr, perf.CallingThread, perf.AnyCPU, nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ev.Close()
+
+	if err := ev.MapRing(); err != nil {
+		t.Fatal(err)
+	}
+
+	const timeout = 20 * time.Millisecond
+	ch := make(chan recordReadResult)
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+
+		for i := 0; i < 2; i++ {
+			rec, err := ev.ReadRecord(ctx)
+			ch <- recordReadResult{rec: rec, err: err}
+		}
+	}()
+	c, err := ev.Measure(func() {
+		unix.Getpid()
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Value != 1 {
+		t.Fatalf("got %d hits for %q, want 1", c.Value, c.Label)
+	}
+
+	// For the first event, we should get a valid sample.
+	got := <-ch
+	if got.err != nil {
+		t.Fatalf("got %v, want valid first sample", got.err)
+	}
+
+	// Now, we should get a timeout.
+	got = <-ch
+	if got.err != context.DeadlineExceeded {
+		t.Fatalf("got %v, want %v", got.err, context.DeadlineExceeded)
+	}
+}
+
+type recordReadResult struct {
+	rec perf.Record
+	err error
+}
+
 func TestRecordGetpid(t *testing.T) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
@@ -40,17 +103,13 @@ func TestRecordGetpid(t *testing.T) {
 		t.Fatalf("MapRing: %v", err)
 	}
 
-	type result struct {
-		rec perf.Record
-		err error
-	}
-	ch := make(chan result)
+	ch := make(chan recordReadResult)
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 		defer cancel()
 
 		rec, err := ev.ReadRecord(ctx)
-		ch <- result{rec, err}
+		ch <- recordReadResult{rec, err}
 	}()
 	count, err := ev.Measure(func() {
 		getpidTrigger()
