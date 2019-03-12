@@ -155,8 +155,8 @@ func TestConcurrentSampling(t *testing.T) {
 		for i := 0; i < n; i++ {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 			defer cancel()
-
 			rec, err := getpid.ReadRecord(ctx)
+			t.Log(err)
 			_, isSample := rec.(*perf.SampleRecord)
 			if err == nil && isSample {
 				sawSample <- true

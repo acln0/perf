@@ -72,8 +72,8 @@ type Event struct {
 	// state is the state of the event. See eventState* constants.
 	state int32
 
-	// fd is the event file descriptor.
-	fd int
+	// perffd is the event file descriptor.
+	perffd int
 
 	// group contains other events in the event group, if this event is an
 	// event group leader.
@@ -95,6 +95,9 @@ type Event struct {
 
 	// meta is the metadata page: &ring[0].
 	meta *unix.PerfEventMmapPage
+
+	// epollfd is the epoll(7) file descriptor associated with the ring.
+	epollfd int
 
 	// evfd is an event file descriptor (see eventfd(2)): it is used to
 	// unblock calls to ppoll(2) on the perf fd.
@@ -146,7 +149,7 @@ func Open(attr *Attr, pid, cpu int, group *Event, flags Flag) (*Event, error) {
 			return nil, err
 		}
 		// TODO(acln): this is not quite right: fix the race somehow.
-		groupfd = group.fd
+		groupfd = group.perffd
 	}
 
 	flags |= cloexec
@@ -170,9 +173,9 @@ func Open(attr *Attr, pid, cpu int, group *Event, flags Flag) (*Event, error) {
 	}
 
 	ev := &Event{
-		state: eventStateOK,
-		fd:    fd,
-		attr:  attrClone,
+		state:  eventStateOK,
+		perffd: fd,
+		attr:   attrClone,
 	}
 	if group != nil {
 		group.group = append(group.group, ev)
@@ -195,7 +198,7 @@ func (ev *Event) MapRing() error {
 	size := (1 + numRingPages) * unix.Getpagesize()
 	const prot = unix.PROT_READ | unix.PROT_WRITE
 	const flags = unix.MAP_SHARED
-	ring, err := unix.Mmap(ev.fd, 0, size, prot, flags)
+	ring, err := unix.Mmap(ev.perffd, 0, size, prot, flags)
 	if err != nil {
 		return os.NewSyscallError("mmap", err)
 	}
@@ -203,14 +206,44 @@ func (ev *Event) MapRing() error {
 	meta := (*unix.PerfEventMmapPage)(unsafe.Pointer(&ring[0]))
 	ringdata := ring[meta.Data_offset:]
 
+	epollfd, err := unix.EpollCreate1(unix.EPOLL_CLOEXEC)
+	if err != nil {
+		return os.NewSyscallError("epoll_create1", err)
+	}
+
+	perfev := unix.EpollEvent{
+		Events: unix.EPOLLIN | unix.EPOLLET,
+		Fd:     int32(ev.perffd),
+	}
+
+	err = unix.EpollCtl(epollfd, unix.EPOLL_CTL_ADD, ev.perffd, &perfev)
+	if err != nil {
+		unix.Close(epollfd)
+		return os.NewSyscallError("epoll_ctl", err)
+	}
+
 	evfd, err := unix.Eventfd(0, unix.EFD_CLOEXEC|unix.EFD_NONBLOCK)
 	if err != nil {
+		unix.Close(epollfd)
 		return os.NewSyscallError("eventfd", err)
+	}
+
+	evev := unix.EpollEvent{
+		Events: unix.EPOLLIN | unix.EPOLLET,
+		Fd:     int32(evfd),
+	}
+
+	err = unix.EpollCtl(epollfd, unix.EPOLL_CTL_ADD, evfd, &evev)
+	if err != nil {
+		unix.Close(epollfd)
+		unix.Close(evfd)
+		return os.NewSyscallError("epoll_ctl", err)
 	}
 
 	ev.ring = ring
 	ev.meta = meta
 	ev.ringdata = ringdata
+	ev.epollfd = epollfd
 	ev.evfd = evfd
 	ev.pollreq = make(chan pollreq)
 	ev.pollresp = make(chan pollresp)
@@ -240,7 +273,7 @@ func (ev *Event) FD() (int, error) {
 	if err := ev.ok(); err != nil {
 		return -1, err
 	}
-	return ev.fd, nil
+	return ev.perffd, nil
 }
 
 // Measure disables the event, resets it, enables it, runs f, disables it again,
@@ -289,7 +322,7 @@ func (ev *Event) Enable() error {
 	if err := ev.ok(); err != nil {
 		return err
 	}
-	return ioctlEnable(ev.fd)
+	return ioctlEnable(ev.perffd)
 }
 
 // Disable disables the event.
@@ -297,7 +330,7 @@ func (ev *Event) Disable() error {
 	if err := ev.ok(); err != nil {
 		return err
 	}
-	return ioctlDisable(ev.fd)
+	return ioctlDisable(ev.perffd)
 }
 
 // BUG(acln): (*Event).Refresh is not implemented, because we do not deal with POLLHUP in the poll goroutine yet
@@ -307,7 +340,7 @@ func (ev *Event) Reset() error {
 	if err := ev.ok(); err != nil {
 		return err
 	}
-	return ioctlReset(ev.fd)
+	return ioctlReset(ev.perffd)
 }
 
 // UpdatePeriod updates the overflow period for the event. On older kernels,
@@ -316,7 +349,7 @@ func (ev *Event) UpdatePeriod(p uint64) error {
 	if err := ev.ok(); err != nil {
 		return err
 	}
-	return ioctlPeriod(ev.fd, &p)
+	return ioctlPeriod(ev.perffd, &p)
 }
 
 // SetOutput tells the kernel to send records to the specified
@@ -339,12 +372,12 @@ func (ev *Event) SetOutput(target *Event) error {
 		return err
 	}
 	if target == nil {
-		return ioctlSetOutput(ev.fd, -1)
+		return ioctlSetOutput(ev.perffd, -1)
 	}
 	if err := target.ok(); err != nil {
 		return err
 	}
-	return ioctlSetOutput(ev.fd, target.fd)
+	return ioctlSetOutput(ev.perffd, target.perffd)
 }
 
 // BUG(acln): (*Event).SetFtraceFilter is not implemented
@@ -355,7 +388,7 @@ func (ev *Event) ID() (uint64, error) {
 		return 0, err
 	}
 	var val uint64
-	err := ioctlID(ev.fd, &val)
+	err := ioctlID(ev.perffd, &val)
 	return val, err
 }
 
@@ -365,7 +398,7 @@ func (ev *Event) SetBPF(progfd uint32) error {
 	if err := ev.ok(); err != nil {
 		return err
 	}
-	return ioctlSetBPF(ev.fd, progfd)
+	return ioctlSetBPF(ev.perffd, progfd)
 }
 
 // PauseOutput pauses the output from ev.
@@ -373,7 +406,7 @@ func (ev *Event) PauseOutput() error {
 	if err := ev.ok(); err != nil {
 		return err
 	}
-	return ioctlPauseOutput(ev.fd, 1)
+	return ioctlPauseOutput(ev.perffd, 1)
 }
 
 // ResumeOutput resumes output from ev.
@@ -381,7 +414,7 @@ func (ev *Event) ResumeOutput() error {
 	if err := ev.ok(); err != nil {
 		return err
 	}
-	return ioctlPauseOutput(ev.fd, 0)
+	return ioctlPauseOutput(ev.perffd, 0)
 }
 
 // QueryBPF queries the event for BPF program file descriptors attached to
@@ -391,7 +424,7 @@ func (ev *Event) QueryBPF(max uint32) ([]uint32, error) {
 	if err := ev.ok(); err != nil {
 		return nil, err
 	}
-	return ioctlQueryBPF(ev.fd, max)
+	return ioctlQueryBPF(ev.perffd, max)
 }
 
 // ModifyAttributes modifies the attributes of an event.
@@ -399,7 +432,7 @@ func (ev *Event) ModifyAttributes(attr Attr) error {
 	if err := ev.ok(); err != nil {
 		return err
 	}
-	return ioctlModifyAttributes(ev.fd, attr.sysAttr())
+	return ioctlModifyAttributes(ev.perffd, attr.sysAttr())
 }
 
 type errWriter struct {
@@ -464,7 +497,7 @@ func (ev *Event) ReadCount() (Count, error) {
 
 	// TODO(acln): use rdpmc on x86 instead of read(2)?
 	buf := make([]byte, ev.attr.CountFormat.readSize())
-	_, err := unix.Read(ev.fd, buf)
+	_, err := unix.Read(ev.perffd, buf)
 	if err != nil {
 		return c, os.NewSyscallError("read", err)
 	}
@@ -538,7 +571,7 @@ func (ev *Event) ReadGroupCount() (GroupCount, error) {
 	headerSize := ev.attr.CountFormat.groupReadHeaderSize()
 	countsSize := (1 + len(ev.group)) * ev.attr.CountFormat.groupReadCountSize()
 	buf := make([]byte, headerSize+countsSize)
-	_, err := unix.Read(ev.fd, buf)
+	_, err := unix.Read(ev.perffd, buf)
 	if err != nil {
 		return gc, os.NewSyscallError("read", err)
 	}
@@ -561,6 +594,7 @@ func (ev *Event) Close() error {
 		<-ev.pollresp
 		unix.Munmap(ev.ring)
 		unix.Close(ev.evfd)
+		unix.Close(ev.epollfd)
 	}
 
 	for _, ev := range ev.owned {
@@ -568,7 +602,7 @@ func (ev *Event) Close() error {
 	}
 
 	ev.state = eventStateClosed
-	return unix.Close(ev.fd)
+	return unix.Close(ev.perffd)
 }
 
 // Attr configures a perf event.

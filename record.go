@@ -76,7 +76,6 @@ func (ev *Event) ReadRawRecord(ctx context.Context, raw *RawRecord) error {
 	// Start a round of polling, then await results. Only one request
 	// can be in flight at a time, and the whole request-response cycle
 	// is owned by the current invocation of ReadRawRecord.
-again:
 	ev.pollreq <- pollreq{timeout: timeout}
 	select {
 	case <-ctx.Done():
@@ -111,24 +110,19 @@ again:
 			return resp.err
 		}
 		if !resp.perfready {
-			// Here, we have not touched ev.evfd, there was no
-			// polling error, and ev.fd is not ready. Therefore,
-			// ppoll(2) must have timed out. The reason we
-			// are here is the following: doPoll woke up, and
-			// immediately sent us a pollresp, which won the
-			// race with <-ctx.Done(), such that this select
-			// case fired. In any case, ctx is expired, because
-			// we wouldn't be here otherwise.
+			// Here, we have not touched ev.evfd, there
+			// was no polling error, and ev.perffd is not
+			// ready. Therefore, ppoll(2) must have timed out.
+			//
+			// The reason we are here is the following: doPoll
+			// woke up, and immediately sent us a pollresp, which
+			// won the race with <-ctx.Done(), such that this
+			// select case fired. In any case, ctx is expired,
+			// because we wouldn't be here otherwise.
 			<-ctx.Done()
 			return ctx.Err()
 		}
-		if !ev.readRawRecordNonblock(raw) {
-			// BUG(acln): horrible hack! get rid of this as soon as possible,
-			// and figure out the root cause of the issue.
-			//
-			// See TestConcurrentSampling.
-			goto again
-		}
+		ev.readRawRecordNonblock(raw) // should succeed now
 		return nil
 	}
 }
@@ -175,39 +169,40 @@ func (ev *Event) poll() {
 	}
 }
 
-// doPoll executes one round of polling on ev.fd and ev.evfd. A req.timeout
-// value of zero is interpreted as "no timeout".
+// doPoll executes one round of polling on ev.perffd and ev.evfd. A
+// req.timeout value of zero is interpreted as "no timeout".
 func (ev *Event) doPoll(req pollreq) pollresp {
-	var systimeout *unix.Timespec
+	timeout := -1
 	if req.timeout > 0 {
-		sec := req.timeout / time.Second
-		nsec := req.timeout - sec*time.Second
-		systimeout = &unix.Timespec{
-			Sec:  int64(sec),
-			Nsec: int64(nsec),
-		}
+		timeout = int(req.timeout / time.Millisecond)
 	}
 
-	pollfds := []unix.PollFd{
-		{Fd: int32(ev.fd), Events: unix.POLLIN},
-		{Fd: int32(ev.evfd), Events: unix.POLLIN},
-	}
+	var events [2]unix.EpollEvent
 again:
-	_, err := unix.Ppoll(pollfds, systimeout, nil)
+	n, err := unix.EpollWait(ev.epollfd, events[:], timeout)
 	// TODO(acln): do we need to do this business at all? See #20400.
 	if err == unix.EINTR {
 		goto again
 	}
 
-	// If we are here and we have successfully woken up, it is for one
-	// of three reasons: we got POLLIN on ev.fd, the ppoll(2) timeout
-	// fired, or we got POLLIN on ev.evfd.
+	fmt.Printf("poll: got %d events\n", n)
+
+	// If we are here and we have successfully woken up, it is for
+	// one of three reasons: we got POLLIN on ev.perffd, the epoll_wait(2)
+	// timeout fired, or we got POLLIN on ev.evfd.
 	//
 	// Report if the perf fd is ready, and any errors except EINTR.
 	// The machinery is documented in more detail in ReadRawRecord.
+	perfready := false
+	for _, e := range events[:n] {
+		fmt.Printf("fd=%d events=%#x\n", e.Fd, e.Events)
+		if e.Events&unix.EPOLLIN != 0 && int(e.Fd) == ev.perffd {
+			perfready = true
+		}
+	}
 	return pollresp{
-		perfready: pollfds[0].Revents&unix.POLLIN != 0,
-		err:       os.NewSyscallError("ppoll", err),
+		perfready: perfready,
+		err:       os.NewSyscallError("epoll_wait", err),
 	}
 }
 
@@ -217,7 +212,7 @@ type pollreq struct {
 }
 
 type pollresp struct {
-	// perfready indicates if the perf FD (ev.fd) is ready.
+	// perfready indicates if the perf FD (ev.perffd) is ready.
 	perfready bool
 
 	// err is the *os.SyscallError from ppoll(2).
