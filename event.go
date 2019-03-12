@@ -583,7 +583,7 @@ type Attr struct {
 	// string), it is included verbatim.
 	//
 	// For most events, the computed Label matches the label specified by
-	// ``perf list'' for the same event (but see BUGS).
+	// ``perf list'' for the same event (but see Bugs).
 	Label string
 
 	// Type is the major type of the event.
@@ -1248,7 +1248,7 @@ func (opt Options) marshal() uint64 {
 		opt.EnableOnExec,
 		opt.Task,
 		opt.Watermark,
-		false, false, // 2 bits for skid constraint, TODO
+		false, false, // 2 bits for skid constraint
 		opt.MmapData,
 		opt.RecordIDAll,
 		opt.ExcludeHost,
