@@ -78,6 +78,7 @@ func (ev *Event) ReadRawRecord(ctx context.Context, raw *RawRecord) error {
 	// Start a round of polling, then await results. Only one request
 	// can be in flight at a time, and the whole request-response cycle
 	// is owned by the current invocation of ReadRawRecord.
+again:
 	ev.pollreq <- pollreq{timeout: timeout}
 	select {
 	case <-ctx.Done():
@@ -125,7 +126,26 @@ func (ev *Event) ReadRawRecord(ctx context.Context, raw *RawRecord) error {
 			<-ctx.Done()
 			return ctx.Err()
 		}
-		ev.readRawRecordNonblock(raw) // should succeed now
+		if !ev.readRawRecordNonblock(raw) {
+			// It might happen that an overflow notification was
+			// generated on the file descriptor, we observed it
+			// as EPOLLIN, but there is still nothing new for us
+			// to read in the ring buffer.
+			//
+			// This is because the notification is raised based
+			// on the Attr.Wakeup and Attr.Options.Watermark
+			// settings, rather than based on what events we've
+			// seen already.
+			//
+			// For example, for an event with Attr.Wakeup == 1,
+			// EPOLLIN will be indicated on the file descriptor
+			// after the first event, regardless of whether we
+			// have consumed it from the ring buffer or not.
+			//
+			// If we happen to see EPOLLIN with an empty ring
+			// buffer, the only thing to do is to wait again.
+			goto again
+		}
 		return nil
 	}
 }
@@ -188,8 +208,6 @@ again:
 		goto again
 	}
 
-	fmt.Printf("poll: got %d events\n", n)
-
 	// If we are here and we have successfully woken up, it is for
 	// one of three reasons: we got POLLIN on ev.perffd, the epoll_wait(2)
 	// timeout fired, or we got POLLIN on ev.evfd.
@@ -198,7 +216,6 @@ again:
 	// The machinery is documented in more detail in ReadRawRecord.
 	perfready := false
 	for _, e := range events[:n] {
-		fmt.Printf("fd=%d events=%#x\n", e.Fd, e.Events)
 		if e.Events&unix.EPOLLIN != 0 && int(e.Fd) == ev.perffd {
 			perfready = true
 		}
