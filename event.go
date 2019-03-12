@@ -674,6 +674,13 @@ func (a Attr) sysAttr() *unix.PerfEventAttr {
 	}
 }
 
+// Configure implements the Configurator interface. It overwrites target
+// with a. See also (*Group).Add.
+func (a *Attr) Configure(target *Attr) error {
+	*target = *a
+	return nil
+}
+
 // SetSamplePeriod configures the sampling period for the event.
 //
 // It sets attr.Sample to p and attr.Options.Freq to false.

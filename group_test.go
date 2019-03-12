@@ -28,7 +28,7 @@ func TestGroup(t *testing.T) {
 	perf.Dummy.Configure(dummy)
 	dummy.Sample = 1
 
-	g.AddAttr(dummy)
+	g.Add(dummy)
 
 	ev, err := g.Open(perf.CallingThread, perf.AnyCPU)
 	if err != nil {

@@ -258,7 +258,7 @@ func TestGroupRecordRedirect(t *testing.T) {
 			Running: true,
 		},
 	}
-	g.AddAttr(getpidattr, writeattr)
+	g.Add(getpidattr, writeattr)
 
 	ev, err := g.Open(perf.CallingThread, perf.AnyCPU)
 	if err != nil {

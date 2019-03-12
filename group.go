@@ -45,19 +45,6 @@ func (g *Group) add(cfg Configurator) {
 		g.err = err
 		return
 	}
-	g.addAttr(attr)
-}
-
-// AddAttr adds attr to the event group, unchanged.
-func (g *Group) AddAttr(attrs ...*Attr) {
-	for _, attr := range attrs {
-		attrClone := new(Attr)
-		*attrClone = *attr
-		g.addAttr(attrClone)
-	}
-}
-
-func (g *Group) addAttr(attr *Attr) {
 	if attr.Sample != 0 {
 		g.leaderNeedsRing = true
 	}
