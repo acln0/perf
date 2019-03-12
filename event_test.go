@@ -20,7 +20,7 @@ import (
 type singleTracepointTest struct {
 	category string
 	event    string
-	trigger  func() error
+	trigger  func()
 }
 
 func (tt singleTracepointTest) run(t *testing.T) {
@@ -40,9 +40,7 @@ func (tt singleTracepointTest) run(t *testing.T) {
 	defer ev.Close()
 
 	count, err := ev.Measure(func() {
-		if err := tt.trigger(); err != nil {
-			t.Fatalf("trigger: %v", err)
-		}
+		tt.trigger()
 	})
 	if err != nil {
 		t.Fatalf("Measure: %v", err)
@@ -79,32 +77,29 @@ func TestSingleTracepoint(t *testing.T) {
 	}
 }
 
-func getpidTrigger() error {
+func getpidTrigger() {
 	unix.Getpid()
-	return nil
 }
 
-func readTrigger() error {
+func readTrigger() {
 	zero, err := os.Open("/dev/zero")
 	if err != nil {
-		return err
+		panic(err)
 	}
 	buf := make([]byte, 8)
 	if _, err := zero.Read(buf); err != nil {
-		return err
+		panic(err)
 	}
-	return zero.Close()
 }
 
-func writeTrigger() error {
+func writeTrigger() {
 	null, err := os.OpenFile("/dev/null", os.O_WRONLY, 0200)
 	if err != nil {
-		return err
+		panic(err)
 	}
 	if _, err := null.Write([]byte("big data")); err != nil {
-		return err
+		panic(err)
 	}
-	return null.Close()
 }
 
 func TestSumIPC(t *testing.T) {

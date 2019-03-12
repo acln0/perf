@@ -76,6 +76,7 @@ func (ev *Event) ReadRawRecord(ctx context.Context, raw *RawRecord) error {
 	// Start a round of polling, then await results. Only one request
 	// can be in flight at a time, and the whole request-response cycle
 	// is owned by the current invocation of ReadRawRecord.
+again:
 	ev.pollreq <- pollreq{timeout: timeout}
 	select {
 	case <-ctx.Done():
@@ -121,7 +122,13 @@ func (ev *Event) ReadRawRecord(ctx context.Context, raw *RawRecord) error {
 			<-ctx.Done()
 			return ctx.Err()
 		}
-		ev.readRawRecordNonblock(raw) // will succeed now
+		if !ev.readRawRecordNonblock(raw) {
+			// BUG(acln): horrible hack! get rid of this as soon as possible,
+			// and figure out the root cause of the issue.
+			//
+			// See TestConcurrentSampling.
+			goto again
+		}
 		return nil
 	}
 }

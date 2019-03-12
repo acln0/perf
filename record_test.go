@@ -19,38 +19,38 @@ func TestPollTimeout(t *testing.T) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	getpid := perf.Tracepoint("syscalls", "sys_enter_getpid")
-	attr := new(perf.Attr)
-	if err := getpid.Configure(attr); err != nil {
+	ga := new(perf.Attr)
+	gtp := perf.Tracepoint("syscalls", "sys_enter_getpid")
+	if err := gtp.Configure(ga); err != nil {
 		t.Fatal(err)
 	}
 
-	attr.Sample = 1
-	attr.SampleFormat.Tid = true
+	ga.Sample = 1
+	ga.SampleFormat.Tid = true
 
-	ev, err := perf.Open(attr, perf.CallingThread, perf.AnyCPU, nil, 0)
+	getpid, err := perf.Open(ga, perf.CallingThread, perf.AnyCPU, nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ev.Close()
+	defer getpid.Close()
 
-	if err := ev.MapRing(); err != nil {
+	if err := getpid.MapRing(); err != nil {
 		t.Fatal(err)
 	}
 
-	const timeout = 20 * time.Millisecond
-	ch := make(chan recordReadResult)
+	errch := make(chan error)
 
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 		defer cancel()
 
 		for i := 0; i < 2; i++ {
-			rec, err := ev.ReadRecord(ctx)
-			ch <- recordReadResult{rec: rec, err: err}
+			_, err := getpid.ReadRecord(ctx)
+			errch <- err
 		}
 	}()
-	c, err := ev.Measure(func() {
+
+	c, err := getpid.Measure(func() {
 		unix.Getpid()
 	})
 	if err != nil {
@@ -61,15 +61,13 @@ func TestPollTimeout(t *testing.T) {
 	}
 
 	// For the first event, we should get a valid sample.
-	got := <-ch
-	if got.err != nil {
-		t.Fatalf("got %v, want valid first sample", got.err)
+	if err := <-errch; err != nil {
+		t.Fatalf("got %v, want valid first sample", err)
 	}
 
 	// Now, we should get a timeout.
-	got = <-ch
-	if got.err != context.DeadlineExceeded {
-		t.Fatalf("got %v, want %v", got.err, context.DeadlineExceeded)
+	if err := <-errch; err != context.DeadlineExceeded {
+		t.Fatalf("got %v, want %v", err, context.DeadlineExceeded)
 	}
 }
 
@@ -78,54 +76,115 @@ type recordReadResult struct {
 	err error
 }
 
-func TestRecordGetpid(t *testing.T) {
+func TestSampleGetpid(t *testing.T) {
+	ga := new(perf.Attr)
+	gtp := perf.Tracepoint("syscalls", "sys_enter_getpid")
+	if err := gtp.Configure(ga); err != nil {
+		t.Fatal(err)
+	}
+
+	ga.Sample = 1
+	ga.SampleFormat.Tid = true
+
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	getpid := perf.Tracepoint("syscalls", "sys_enter_getpid")
-	attr := new(perf.Attr)
-	if err := getpid.Configure(attr); err != nil {
-		t.Fatalf("Configure: %v", err)
-	}
-	attr.Sample = 1
-	attr.SampleFormat = perf.SampleFormat{
-		Tid:  true,
-		Time: true,
-		CPU:  true,
-		Addr: true,
-	}
-	ev, err := perf.Open(attr, perf.CallingThread, perf.AnyCPU, nil, 0)
+	getpid, err := perf.Open(ga, perf.CallingThread, perf.AnyCPU, nil, 0)
 	if err != nil {
-		t.Fatalf("Open: %v", err)
+		t.Fatal(err)
 	}
-	defer ev.Close()
-	if err := ev.MapRing(); err != nil {
-		t.Fatalf("MapRing: %v", err)
+	defer getpid.Close()
+	if err := getpid.MapRing(); err != nil {
+		t.Fatal(err)
 	}
 
-	ch := make(chan recordReadResult)
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
-		defer cancel()
-
-		rec, err := ev.ReadRecord(ctx)
-		ch <- recordReadResult{rec, err}
-	}()
-	count, err := ev.Measure(func() {
-		getpidTrigger()
+	c, err := getpid.Measure(func() {
+		unix.Getpid()
 	})
 	if err != nil {
-		t.Fatalf("Measure: %v", err)
+		t.Fatal(err)
 	}
 
-	if count.Value != 1 {
-		t.Fatalf("got %d hits for %q, want 1 hit", count.Value, count.Label)
+	if c.Value != 1 {
+		t.Fatalf("got %d hits for %q, want 1 hit", c.Value, c.Label)
 	}
-	res := <-ch
-	if res.err != nil {
-		t.Fatalf("did not get record: %v", res.err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Millisecond)
+	defer cancel()
+	rec, err := getpid.ReadRecord(ctx)
+	if err != nil {
+		t.Fatalf("got %v, want a valid sample record", err)
 	}
-	_ = res.rec // TODO(acln): find a way to write a test for this
+	sr, ok := rec.(*perf.SampleRecord)
+	if !ok {
+		t.Fatalf("got a %T, want a SampleRecord", rec)
+	}
+	pid, tid := unix.Getpid(), unix.Gettid()
+	if int(sr.Pid) != pid || int(sr.Tid) != tid {
+		t.Fatalf("got pid=%d tid=%d, want pid=%d tid=%d", sr.Pid, sr.Tid, pid, tid)
+	}
+}
+
+func TestConcurrentSampling(t *testing.T) {
+	ga := new(perf.Attr)
+	gtp := perf.Tracepoint("syscalls", "sys_enter_getpid")
+	if err := gtp.Configure(ga); err != nil {
+		t.Fatal(err)
+	}
+
+	ga.Sample = 1
+	ga.SampleFormat.Tid = true
+	ga.Wakeup = 1
+
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	getpid, err := perf.Open(ga, perf.CallingThread, perf.AnyCPU, nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer getpid.Close()
+	if err := getpid.MapRing(); err != nil {
+		t.Fatal(err)
+	}
+
+	const n = 5
+	sawSample := make(chan bool)
+
+	go func() {
+		for i := 0; i < n; i++ {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+			defer cancel()
+
+			rec, err := getpid.ReadRecord(ctx)
+			_, isSample := rec.(*perf.SampleRecord)
+			if err == nil && isSample {
+				sawSample <- true
+			} else {
+				sawSample <- false
+			}
+		}
+	}()
+
+	var bad bool
+
+	c, err := getpid.Measure(func() {
+		for i := 0; i < n; i++ {
+			unix.Getpid()
+			if ok := <-sawSample; !ok {
+				bad = true
+			}
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Value != n {
+		t.Fatalf("got %d hits for %q, want %d", c.Value, c.Label, n)
+	}
+	if bad {
+		t.Fatalf("didn't see all samples on ring during measurement")
+	}
 }
 
 func TestRecordRedirectManualWire(t *testing.T) {
@@ -267,12 +326,8 @@ func TestGroupRecordRedirect(t *testing.T) {
 	defer ev.Close()
 
 	counts, err := ev.MeasureGroup(func() {
-		if err := getpidTrigger(); err != nil {
-			t.Fatal(err)
-		}
-		if err := writeTrigger(); err != nil {
-			t.Fatal(err)
-		}
+		getpidTrigger()
+		writeTrigger()
 	})
 	if err != nil {
 		t.Fatal(err)
