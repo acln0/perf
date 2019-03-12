@@ -234,6 +234,14 @@ func (ev *Event) ok() error {
 	}
 }
 
+// FD returns the file descriptor associated with the event.
+func (ev *Event) FD() (int, error) {
+	if err := ev.ok(); err != nil {
+		return -1, err
+	}
+	return ev.fd, nil
+}
+
 // Measure disables the event, resets it, enables it, runs f, disables it again,
 // then reads the Count associated with the event.
 func (ev *Event) Measure(f func()) (Count, error) {
