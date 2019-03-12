@@ -144,6 +144,10 @@ again:
 			//
 			// If we happen to see EPOLLIN with an empty ring
 			// buffer, the only thing to do is to wait again.
+			//
+			// TODO(acln): I do not quite believe this, but I see
+			// no other explanation. If only something could say
+			// EAGAIN, so we would know exactly what to do.
 			goto again
 		}
 		return nil
