@@ -145,7 +145,6 @@ func Open(attr *Attr, pid, cpu int, group *Event, flags Flag) (*Event, error) {
 		if err := group.ok(); err != nil {
 			return nil, err
 		}
-		// TODO(acln): this is not quite right: fix the race somehow.
 		groupfd = group.perffd
 	}
 
@@ -1297,6 +1296,26 @@ type eventID struct {
 }
 
 var eventLabels sync.Map // of eventID to eventLabel
+
+func init() {
+	type labeler interface {
+		eventLabel() eventLabel
+	}
+
+	var events []Configurator
+	events = append(events, AllHardwareCounters()...)
+	events = append(events, AllSoftwareCounters()...)
+
+	for _, cfg := range events {
+		if l, ok := cfg.(labeler); ok {
+			var a Attr
+			cfg.Configure(&a)
+			id := eventID{Type: uint64(a.Type), Config: a.Config}
+			label := l.eventLabel()
+			eventLabels.Store(id, label)
+		}
+	}
+}
 
 func lookupLabel(id eventID) eventLabel {
 	v, ok := eventLabels.Load(id)

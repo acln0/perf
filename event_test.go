@@ -14,6 +14,61 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+func TestOpen(t *testing.T) {
+	t.Run("BadGroup", func(t *testing.T) {
+		ca := new(perf.Attr)
+		perf.CPUCycles.Configure(ca)
+		ca.CountFormat.Group = true
+
+		cycles, err := perf.Open(ca, perf.CallingThread, perf.AnyCPU, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cycles.Close()
+
+		_, err = perf.Open(ca, perf.CallingThread, perf.AnyCPU, cycles, 0)
+		if err == nil {
+			t.Fatal("successful Open with closed group *Event")
+		}
+
+		cycles = new(perf.Event) // uninitialized
+		_, err = perf.Open(ca, perf.CallingThread, perf.AnyCPU, cycles, 0)
+		if err == nil {
+			t.Fatal("successful Open with closed group *Event")
+		}
+	})
+	t.Run("BadAttrType", func(t *testing.T) {
+		a := &perf.Attr{
+			Type: 42,
+		}
+
+		_, err := perf.Open(a, perf.CallingThread, perf.AnyCPU, nil, 0)
+		if err == nil {
+			t.Fatal("got a valid *Event for bad Attr.Type 42")
+		}
+	})
+	t.Run("PopulatesLabel", func(t *testing.T) {
+		ca := &perf.Attr{
+			Type:   perf.HardwareEvent,
+			Config: uint64(perf.CPUCycles),
+		}
+
+		cycles, err := perf.Open(ca, perf.CallingThread, perf.AnyCPU, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer cycles.Close()
+
+		c, err := cycles.Measure(getpidTrigger)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c.Label == "" {
+			t.Fatal("Open did not set label on *Attr")
+		}
+	})
+}
+
 func TestHardwareCounters(t *testing.T) {
 	var g perf.Group
 	g.Add(perf.CPUCycles, perf.Instructions)
@@ -25,6 +80,7 @@ func TestHardwareCounters(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer hw.Close()
 
 	var sum int64
 	gc, err := hw.MeasureGroup(func() {
@@ -44,9 +100,38 @@ func TestHardwareCounters(t *testing.T) {
 
 var fault []byte
 
-func TestSoftwareCounters(t *testing.T) {
+func TestCountPageFaults(t *testing.T) {
 	pfa := new(perf.Attr)
 	perf.PageFaults.Configure(pfa)
+
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	faults, err := perf.Open(pfa, perf.CallingThread, perf.AnyCPU, nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer faults.Close()
+
+	runtime.GC()
+
+	c, err := faults.Measure(func() {
+		fault = make([]byte, 64*1024*1024)
+		fault[0] = 1
+		fault[63*1024*1024] = 1
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Value == 0 {
+		t.Fatal("didn't see a page fault")
+	}
+}
+
+func TestCountFormatID(t *testing.T) {
+	pfa := new(perf.Attr)
+	perf.PageFaults.Configure(pfa)
+	pfa.CountFormat.ID = true
 
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
@@ -68,6 +153,13 @@ func TestSoftwareCounters(t *testing.T) {
 	}
 	if c.Value == 0 {
 		t.Fatal("didn't see a page fault")
+	}
+	id, err := faults.ID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != c.ID {
+		t.Fatalf("got ID %d from ioctl, but %d from count read", id, c.ID)
 	}
 }
 
