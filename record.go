@@ -17,6 +17,13 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// ErrDisabled is returned from ReadRecord or ReadRawRecord under the
+// following circumstances: if Refresh was called on the Event and the
+// associated counter has reached zero, or - starting with Linux 3.18 -
+// if the event being monitored is attached to a different process and that
+// process exits.
+var ErrDisabled = errors.New("event disabled")
+
 // ReadRecord reads and decodes a record from the ring buffer associated
 // with ev.
 //
@@ -109,6 +116,11 @@ again:
 		if resp.err != nil {
 			// Polling failed. Nothing to do but report the error.
 			return resp.err
+		}
+		if resp.perfhup {
+			// Saw POLLHUP on ev.perffd. See also the
+			// documentation for ErrDisabled.
+			return ErrDisabled
 		}
 		if !resp.perfready {
 			// Here, we have not touched ev.wakeupfd, there
@@ -214,14 +226,17 @@ again:
 		goto again
 	}
 
-	// If we are here and we have successfully woken up, it is for
-	// one of three reasons: we got POLLIN on ev.perffd, the ppoll(2)
-	// timeout fired, or we got POLLIN on ev.wakeupfd.
+	// If we are here and we have successfully woken up, it is for one
+	// of four reasons: we got POLLIN on ev.perffd, we got POLLHUP on
+	// ev.perffd (see ErrDisabled), the ppoll(2) timeout fired, or we
+	// got POLLIN on ev.wakeupfd.
 	//
-	// Report if the perf fd is ready, and any errors except EINTR.
-	// The machinery is documented in more detail in ReadRawRecord.
+	// Report if the perf fd is ready, if we saw POLLHUP, and any
+	// errors except EINTR. The machinery is documented in more detail
+	// in ReadRawRecord.
 	return pollresp{
 		perfready: pollfds[0].Events&unix.POLLIN != 0,
+		perfhup:   pollfds[0].Events&unix.POLLHUP != 0,
 		err:       os.NewSyscallError("ppoll", err),
 	}
 }
@@ -234,6 +249,9 @@ type pollreq struct {
 type pollresp struct {
 	// perfready indicates if the perf FD (ev.perffd) is ready.
 	perfready bool
+
+	// perfhup indicates if POLLUP was observed on ev.perffd.
+	perfhup bool
 
 	// err is the *os.SyscallError from ppoll(2).
 	err error

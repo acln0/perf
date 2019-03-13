@@ -293,7 +293,17 @@ func (ev *Event) Disable() error {
 	return ioctlDisable(ev.perffd)
 }
 
-// BUG(acln): (*Event).Refresh is not implemented, because we do not deal with POLLHUP in the poll goroutine yet
+// Refresh adds delta to a counter associated with the event. This counter
+// decrements every time the event overflows. Once the counter reaches zero,
+// the event is disabled and ErrDisabled is returned from ReadRecord or
+// ReadRawRecord. Calling Refresh with delta == 0 is considered undefined
+// behavior.
+func (ev *Event) Refresh(delta int) error {
+	if err := ev.ok(); err != nil {
+		return err
+	}
+	return ioctlRefresh(ev.perffd, delta)
+}
 
 // Reset resets the counters associated with the event.
 func (ev *Event) Reset() error {
