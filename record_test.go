@@ -135,11 +135,6 @@ func TestConcurrentSampling(t *testing.T) {
 	ga.Sample = 1
 	ga.SampleFormat.Tid = true
 	ga.Wakeup = 1
-	// BUG(acln): set the above to 10, watch the test fail, and try
-	// to understand why. Is it because Wakeup > Sample is nonsensical?
-	// Why do we miss exactly one sample when Wakeup > Sample, no matter
-	// what the value for n is? And why is it always exactly the second
-	// sample? Is this a race condition?
 
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
@@ -153,7 +148,7 @@ func TestConcurrentSampling(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	const n = 5
+	const n = 6
 	sawSample := make(chan bool)
 
 	go func() {
