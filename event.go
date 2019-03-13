@@ -674,7 +674,7 @@ func (a *Attr) Configure(target *Attr) error {
 
 // SetSamplePeriod configures the sampling period for the event.
 //
-// It sets attr.Sample to p and attr.Options.Freq to false.
+// It sets attr.Sample to p and disables a.Options.Freq.
 func (a *Attr) SetSamplePeriod(p uint64) {
 	a.Sample = p
 	a.Options.Freq = false
@@ -682,10 +682,27 @@ func (a *Attr) SetSamplePeriod(p uint64) {
 
 // SetSampleFreq configures the sampling frequency for the event.
 //
-// It sets attr.Sample to f and enables attr.Options.Freq.
+// It sets attr.Sample to f and enables a.Options.Freq.
 func (a *Attr) SetSampleFreq(f uint64) {
 	a.Sample = f
 	a.Options.Freq = true
+}
+
+// SetWakeupEvents configures the event to wake up every n events.
+//
+// It sets a.Wakeup to n and disables a.Options.Watermark.
+func (a *Attr) SetWakeupEvents(n uint32) {
+	a.Wakeup = n
+	a.Options.Watermark = false
+}
+
+// SetWakeupWatermark configures the number of bytes in overflow records
+// before wakeup.
+//
+// It sets a.Wakeup to n and enables a.Options.Watermark.
+func (a *Attr) SetWakeupWatermark(n uint32) {
+	a.Wakeup = n
+	a.Options.Watermark = true
 }
 
 // EventType is the overall type of a performance event.
