@@ -45,18 +45,8 @@ const (
 	// more details.
 	PidCGroup Flag = unix.PERF_FLAG_PID_CGROUP
 
-	// noGroup configures the event to ignore the group parameter
-	// except for the purpose of setting up output redirection using
-	// the fdOutput flag. Since fdOutput is broken, we don't expose
-	// noGroup either, unless someone really needs it.
-	//
-	// People should use SetOutput anyway.
-	noGroup Flag = unix.PERF_FLAG_FD_NO_GROUP
-
-	// fdOutput re-routes the event's sampled output to be included in the
-	// memory mapped buffer of the event specified by the group parameter.
-	// This flag has been broken for a while. We don't expose it for now.
-	fdOutput Flag = unix.PERF_FLAG_FD_OUTPUT
+	// PERF_FLAG_FD_OUTPUT is broken, so we don't expose it, and we don't
+	// expose PERF_FLAG_FD_NO_GROUP either. People should use SetOutput.
 
 	// cloexec configures the event file descriptor to be opened in
 	// close-on-exec mode. Package perf sets this flag by default on
@@ -405,20 +395,6 @@ func (ev *Event) ModifyAttributes(attr Attr) error {
 	return ioctlModifyAttributes(ev.perffd, attr.sysAttr())
 }
 
-type errWriter struct {
-	w   io.Writer
-	err error // sticky
-}
-
-func (ew *errWriter) Write(b []byte) (int, error) {
-	if ew.err != nil {
-		return 0, ew.err
-	}
-	n, err := ew.w.Write(b)
-	ew.err = err
-	return n, err
-}
-
 // Count is a measurement taken by an Event.
 //
 // The Value field is always present and populated.
@@ -426,7 +402,8 @@ func (ew *errWriter) Write(b []byte) (int, error) {
 // The TimeEnabled field is populated if ReadFormat.TimeEnabled is set on
 // the Event the Count was read from. Ditto for TimeRunning and ID.
 //
-// TODO(acln): document Label
+// Label is set based on the Label field of the Attr associated with the
+// event. See the documentation there for more details.
 type Count struct {
 	Value   uint64
 	Enabled time.Duration
@@ -435,23 +412,11 @@ type Count struct {
 	Label   string
 }
 
-// PrintTo pretty prints a Count to w.
-func (c Count) PrintTo(w io.Writer) error {
-	ew := &errWriter{w: w}
+func (c Count) String() string {
 	if c.Label != "" {
-		fmt.Fprintf(ew, "%s: ", c.Label)
+		return fmt.Sprintf("%s = %d", c.Label, c.Value)
 	}
-	fmt.Fprintf(ew, "%d", c.Value)
-	if c.Enabled != 0 {
-		fmt.Fprintf(ew, " enabled = %v", c.Enabled)
-	}
-	if c.Running != 0 {
-		fmt.Fprintf(ew, " running = %v", c.Running)
-	}
-	if c.ID != 0 {
-		fmt.Fprintf(ew, " id = %d", c.ID)
-	}
-	return ew.err
+	return fmt.Sprint(c.Value)
 }
 
 // ReadCount reads the measurement associated with ev. If the Event was
@@ -482,8 +447,6 @@ func (ev *Event) ReadCount() (Count, error) {
 // GroupCount is a group of measurements taken by an Event group.
 //
 // Fields are populated as described in the Count documentation.
-//
-// TODO(acln): document Label
 type GroupCount struct {
 	TimeEnabled time.Duration
 	TimeRunning time.Duration
@@ -494,20 +457,26 @@ type GroupCount struct {
 	}
 }
 
-func (gc GroupCount) PrintTo(w io.Writer) error {
+type errWriter struct {
+	w   io.Writer
+	err error // sticky
+}
+
+func (ew *errWriter) Write(b []byte) (int, error) {
+	if ew.err != nil {
+		return 0, ew.err
+	}
+	n, err := ew.w.Write(b)
+	ew.err = err
+	return n, err
+}
+
+// PrintValues prints a table of gc.Values to w.
+func (gc GroupCount) PrintValues(w io.Writer) error {
 	ew := &errWriter{w: w}
-	if gc.TimeEnabled != 0 {
-		fmt.Fprintf(ew, "time enabled: %v\n", gc.TimeEnabled)
-	}
-	if gc.TimeRunning != 0 {
-		fmt.Fprintf(ew, "time running: %v\n", gc.TimeRunning)
-	}
-	if len(gc.Values) == 0 {
-		return ew.err
-	}
 
 	tw := new(tabwriter.Writer)
-	tw.Init(w, 0, 8, 1, ' ', 0)
+	tw.Init(ew, 0, 8, 1, ' ', 0)
 
 	if gc.Values[0].ID != 0 {
 		fmt.Fprintln(tw, "label\tvalue\tID")
