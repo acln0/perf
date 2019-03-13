@@ -60,11 +60,9 @@ func (ev *Event) ReadRawRecord(ctx context.Context, raw *RawRecord) error {
 	}
 
 	// If the context has a deadline, and that deadline is in the future,
-	// use it to compute a timeout for epoll_wait(2). If the context is
-	// expired, bail out. Otherwise, the timeout is zero, which means
-	// no timeout.
-	//
-	// BUG(acln): <1ms timeouts are not handled gracefully at all
+	// use it to compute a timeout for ppoll(2). If the context is
+	// expired, bail out immediately. Otherwise, the timeout is zero,
+	// which means no timeout.
 	var timeout time.Duration
 	deadline, ok := ctx.Deadline()
 	if ok {
@@ -85,12 +83,12 @@ again:
 		active := false
 		err := ctx.Err()
 		if err == context.Canceled {
-			// Initiate active wakeup. Send a signal on ev.evfd
-			// and wait for doPoll to wake up. doPoll might miss
-			// this signal, but that's okay: see below.
+			// Initiate active wakeup on ev.wakeupfd, and wait for
+			// doPoll to return. doPoll might miss this signal,
+			// but that's okay: see below.
 			val := uint64(1)
 			buf := (*[8]byte)(unsafe.Pointer(&val))[:]
-			unix.Write(ev.evfd, buf)
+			unix.Write(ev.wakeupfd, buf)
 			active = true
 		}
 		<-ev.pollresp
@@ -98,13 +96,13 @@ again:
 		// We don't know if doPoll woke up due to our active wakeup
 		// or because it timed out. It doesn't make a difference.
 		// The important detail here is that doPoll does not touch
-		// ev.evfd (besides polling it for readiness). If we initiated
-		// active wakeup, we must restore the event file descriptor
-		// to quiescent state ourselves, in order to avoid a spurious
-		// wakeup during the next round of polling.
+		// ev.wakeupfd (besides polling it for readiness). If we
+		// initiated active wakeup, we must restore the event file
+		// descriptor to quiescent state ourselves, in order to avoid
+		// a spurious wakeup during the next round of polling.
 		if active {
 			var buf [8]byte
-			unix.Read(ev.evfd, buf[:])
+			unix.Read(ev.wakeupfd, buf[:])
 		}
 		return err
 	case resp := <-ev.pollresp:
@@ -113,10 +111,9 @@ again:
 			return resp.err
 		}
 		if !resp.perfready {
-			// Here, we have not touched ev.evfd, there
+			// Here, we have not touched ev.wakeupfd, there
 			// was no polling error, and ev.perffd is not
-			// ready. Therefore, epoll_wait(2) must have timed
-			// out.
+			// ready. Therefore, ppoll(2) must have timed out.
 			//
 			// The reason we are here is the following: doPoll
 			// woke up, and immediately sent us a pollresp, which
@@ -129,7 +126,7 @@ again:
 		if !ev.readRawRecordNonblock(raw) {
 			// It might happen that an overflow notification was
 			// generated on the file descriptor, we observed it
-			// as EPOLLIN, but there is still nothing new for us
+			// as POLLIN, but there is still nothing new for us
 			// to read in the ring buffer.
 			//
 			// This is because the notification is raised based
@@ -138,11 +135,11 @@ again:
 			// seen already.
 			//
 			// For example, for an event with Attr.Wakeup == 1,
-			// EPOLLIN will be indicated on the file descriptor
+			// POLLIN will be indicated on the file descriptor
 			// after the first event, regardless of whether we
 			// have consumed it from the ring buffer or not.
 			//
-			// If we happen to see EPOLLIN with an empty ring
+			// If we happen to see POLLIN with an empty ring
 			// buffer, the only thing to do is to wait again.
 			//
 			// See also https://github.com/acln0/perfwakeup.
@@ -194,42 +191,43 @@ func (ev *Event) poll() {
 	}
 }
 
-// doPoll executes one round of polling on ev.perffd and ev.evfd. A
-// req.timeout value of zero is interpreted as "no timeout".
+// doPoll executes one round of polling on ev.perffd and ev.wakeupfd.
+//
+// A req.timeout value of zero is interpreted as "no timeout". req.timeout
+// must not be negative.
 func (ev *Event) doPoll(req pollreq) pollresp {
-	timeout := -1
+	var timeout *unix.Timespec
 	if req.timeout > 0 {
-		timeout = int(req.timeout / time.Millisecond)
+		sec := int64(req.timeout / time.Second)
+		nsec := int64(req.timeout) - sec*int64(time.Second)
+		timeout = &unix.Timespec{Sec: sec, Nsec: nsec}
 	}
 
-	var events [2]unix.EpollEvent
+	pollfds := []unix.PollFd{
+		{Fd: int32(ev.perffd), Events: unix.POLLIN},
+		{Fd: int32(ev.wakeupfd), Events: unix.POLLIN},
+	}
 again:
-	n, err := unix.EpollWait(ev.epollfd, events[:], timeout)
+	_, err := unix.Ppoll(pollfds, timeout, nil)
 	// TODO(acln): do we need to do this business at all? See #20400.
 	if err == unix.EINTR {
 		goto again
 	}
 
 	// If we are here and we have successfully woken up, it is for
-	// one of three reasons: we got POLLIN on ev.perffd, the epoll_wait(2)
-	// timeout fired, or we got POLLIN on ev.evfd.
+	// one of three reasons: we got POLLIN on ev.perffd, the ppoll(2)
+	// timeout fired, or we got POLLIN on ev.wakeupfd.
 	//
 	// Report if the perf fd is ready, and any errors except EINTR.
 	// The machinery is documented in more detail in ReadRawRecord.
-	perfready := false
-	for _, e := range events[:n] {
-		if e.Events&unix.EPOLLIN != 0 && int(e.Fd) == ev.perffd {
-			perfready = true
-		}
-	}
 	return pollresp{
-		perfready: perfready,
-		err:       os.NewSyscallError("epoll_wait", err),
+		perfready: pollfds[0].Events&unix.POLLIN != 0,
+		err:       os.NewSyscallError("ppoll", err),
 	}
 }
 
 type pollreq struct {
-	// timeout is the timeout for epoll_wait(2): zero means no timeout
+	// timeout is the timeout for ppoll(2): zero means no timeout
 	timeout time.Duration
 }
 
@@ -237,7 +235,7 @@ type pollresp struct {
 	// perfready indicates if the perf FD (ev.perffd) is ready.
 	perfready bool
 
-	// err is the *os.SyscallError from epoll_wait(2).
+	// err is the *os.SyscallError from ppoll(2).
 	err error
 }
 

@@ -96,12 +96,9 @@ type Event struct {
 	// meta is the metadata page: &ring[0].
 	meta *unix.PerfEventMmapPage
 
-	// epollfd is the epoll(7) file descriptor associated with the ring.
-	epollfd int
-
-	// evfd is an event file descriptor (see eventfd(2)): it is used to
-	// unblock calls to ReadRawRecord when the context expires.
-	evfd int
+	// wakeupfd is an event file descriptor (see eventfd(2)): it is used to
+	// unblock calls to ReadRawRecord when the associated context expires.
+	wakeupfd int
 
 	// pollreq communicates requests from ReadRawRecord to the poll goroutine
 	// associated with the ring.
@@ -206,45 +203,15 @@ func (ev *Event) MapRing() error {
 	meta := (*unix.PerfEventMmapPage)(unsafe.Pointer(&ring[0]))
 	ringdata := ring[meta.Data_offset:]
 
-	epollfd, err := unix.EpollCreate1(unix.EPOLL_CLOEXEC)
+	wakeupfd, err := unix.Eventfd(0, unix.EFD_CLOEXEC|unix.EFD_NONBLOCK)
 	if err != nil {
-		return os.NewSyscallError("epoll_create1", err)
-	}
-
-	perfev := unix.EpollEvent{
-		Events: unix.EPOLLIN | unix.EPOLLET,
-		Fd:     int32(ev.perffd),
-	}
-
-	err = unix.EpollCtl(epollfd, unix.EPOLL_CTL_ADD, ev.perffd, &perfev)
-	if err != nil {
-		unix.Close(epollfd)
-		return os.NewSyscallError("epoll_ctl", err)
-	}
-
-	evfd, err := unix.Eventfd(0, unix.EFD_CLOEXEC|unix.EFD_NONBLOCK)
-	if err != nil {
-		unix.Close(epollfd)
 		return os.NewSyscallError("eventfd", err)
-	}
-
-	evev := unix.EpollEvent{
-		Events: unix.EPOLLIN | unix.EPOLLET,
-		Fd:     int32(evfd),
-	}
-
-	err = unix.EpollCtl(epollfd, unix.EPOLL_CTL_ADD, evfd, &evev)
-	if err != nil {
-		unix.Close(epollfd)
-		unix.Close(evfd)
-		return os.NewSyscallError("epoll_ctl", err)
 	}
 
 	ev.ring = ring
 	ev.meta = meta
 	ev.ringdata = ringdata
-	ev.epollfd = epollfd
-	ev.evfd = evfd
+	ev.wakeupfd = wakeupfd
 	ev.pollreq = make(chan pollreq)
 	ev.pollresp = make(chan pollresp)
 
@@ -593,8 +560,7 @@ func (ev *Event) Close() error {
 		close(ev.pollreq)
 		<-ev.pollresp
 		unix.Munmap(ev.ring)
-		unix.Close(ev.evfd)
-		unix.Close(ev.epollfd)
+		unix.Close(ev.wakeupfd)
 	}
 
 	for _, ev := range ev.owned {
