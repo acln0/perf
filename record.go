@@ -145,7 +145,7 @@ again:
 			// If we happen to see EPOLLIN with an empty ring
 			// buffer, the only thing to do is to wait again.
 			//
-			// See also https://github.com/acln0/perfspurious.
+			// See also https://github.com/acln0/perfwakeup.
 			goto again
 		}
 		return nil
