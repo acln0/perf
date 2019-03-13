@@ -39,20 +39,24 @@ type Flag int
 
 // Flags for calls to Open.
 const (
-	// NoGroup configures the event to ignore the group parameter
-	// except for the purpose of setting up output redirection using
-	// the FDOutput flag.
-	NoGroup Flag = unix.PERF_FLAG_FD_NO_GROUP
-
-	// FDOutput re-routes the event's sampled output to be included in the
-	// memory mapped buffer of the event specified by the group parameter.
-	FDOutput Flag = unix.PERF_FLAG_FD_OUTPUT
-
 	// PidCGroup activates per-container system-wide monitoring. In this
 	// case, a file descriptor opened on /dev/group/<x> must be passed
 	// as the pid parameter. Consult the perf_event_open man page for
 	// more details.
 	PidCGroup Flag = unix.PERF_FLAG_PID_CGROUP
+
+	// noGroup configures the event to ignore the group parameter
+	// except for the purpose of setting up output redirection using
+	// the fdOutput flag. Since fdOutput is broken, we don't expose
+	// noGroup either, unless someone really needs it.
+	//
+	// People should use SetOutput anyway.
+	noGroup Flag = unix.PERF_FLAG_FD_NO_GROUP
+
+	// fdOutput re-routes the event's sampled output to be included in the
+	// memory mapped buffer of the event specified by the group parameter.
+	// This flag has been broken for a while. We don't expose it for now.
+	fdOutput Flag = unix.PERF_FLAG_FD_OUTPUT
 
 	// cloexec configures the event file descriptor to be opened in
 	// close-on-exec mode. Package perf sets this flag by default on
