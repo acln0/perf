@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"acln.ro/perf"
-	"acln.ro/perf/internal/testasm"
 )
 
 func TestGroup(t *testing.T) {
@@ -34,11 +33,16 @@ func TestGroup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	counts, err := ev.MeasureGroup(func() {
-		testasm.SumN(50000)
+
+	sum := int64(0)
+	gc, err := ev.MeasureGroup(func() {
+		for i := int64(0); i < 50000; i++ {
+			sum += i
+		}
 	})
 	if err != nil {
 		t.Fatalf("MeasureGroup: %v", err)
 	}
-	_ = counts // TODO(acln): find a way to write a test for these
+	_ = sum
+	_ = gc // TODO(acln): find a way to write a test for these
 }

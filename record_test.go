@@ -33,7 +33,6 @@ func TestPollTimeout(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer getpid.Close()
-
 	if err := getpid.MapRing(); err != nil {
 		t.Fatal(err)
 	}
@@ -50,9 +49,7 @@ func TestPollTimeout(t *testing.T) {
 		}
 	}()
 
-	c, err := getpid.Measure(func() {
-		unix.Getpid()
-	})
+	c, err := getpid.Measure(getpidTrigger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,11 +66,6 @@ func TestPollTimeout(t *testing.T) {
 	if err := <-errch; err != context.DeadlineExceeded {
 		t.Fatalf("got %v, want %v", err, context.DeadlineExceeded)
 	}
-}
-
-type recordReadResult struct {
-	rec perf.Record
-	err error
 }
 
 func TestSampleGetpid(t *testing.T) {
@@ -98,9 +90,7 @@ func TestSampleGetpid(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c, err := getpid.Measure(func() {
-		unix.Getpid()
-	})
+	c, err := getpid.Measure(getpidTrigger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +159,7 @@ func TestConcurrentSampling(t *testing.T) {
 
 	c, err := getpid.Measure(func() {
 		for i := 0; i < n; i++ {
-			unix.Getpid()
+			getpidTrigger()
 			if ok := <-sawSample; ok {
 				seen++
 			}
@@ -187,9 +177,6 @@ func TestConcurrentSampling(t *testing.T) {
 }
 
 func TestRecordRedirectManualWire(t *testing.T) {
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-
 	getpid := perf.Tracepoint("syscalls", "sys_enter_getpid")
 	attr := new(perf.Attr)
 	if err := getpid.Configure(attr); err != nil {
@@ -207,12 +194,15 @@ func TestRecordRedirectManualWire(t *testing.T) {
 	attr.CountFormat = perf.CountFormat{
 		Group: true,
 	}
+
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
 	leader, err := perf.Open(attr, perf.CallingThread, perf.AnyCPU, nil, 0)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer leader.Close()
-
 	if err := leader.MapRing(); err != nil {
 		t.Fatalf("MapRing: %v", err)
 	}
@@ -230,12 +220,12 @@ func TestRecordRedirectManualWire(t *testing.T) {
 		CPU:  true,
 		Addr: true,
 	}
+
 	follower, err := perf.Open(attr, perf.CallingThread, perf.AnyCPU, leader, 0)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer follower.Close()
-
 	if err := follower.SetOutput(leader); err != nil {
 		t.Fatalf("SetOutput: %v", err)
 	}
@@ -244,6 +234,7 @@ func TestRecordRedirectManualWire(t *testing.T) {
 		rec perf.Record
 		err error
 	}
+
 	ch := make(chan result)
 	go func() {
 		for i := 0; i < 2; i++ {
@@ -253,7 +244,8 @@ func TestRecordRedirectManualWire(t *testing.T) {
 			ch <- result{rec, err}
 		}
 	}()
-	count, err := leader.MeasureGroup(func() {
+
+	gc, err := leader.MeasureGroup(func() {
 		getpidTrigger()
 		writeTrigger()
 	})
@@ -261,18 +253,17 @@ func TestRecordRedirectManualWire(t *testing.T) {
 		t.Fatalf("Measure: %v", err)
 	}
 
-	if got := count.Values[0]; got.Value != 1 {
+	if got := gc.Values[0]; got.Value != 1 {
 		t.Fatalf("got %d hits for %q, want 1 hit", got.Value, got.Label)
 	}
-	if got := count.Values[1]; got.Value != 1 {
+	if got := gc.Values[1]; got.Value != 1 {
 		t.Fatalf("got %d hits for %q, want 1 hit", got.Value, got.Label)
 	}
 	for i := 0; i < 2; i++ {
 		res := <-ch
 		if res.err != nil {
-			t.Fatalf("did not get record: %v", res.err)
+			t.Fatalf("did not get sample record: %v", res.err)
 		}
-		_ = res.rec // TODO(acln): find a way to write a test for these
 	}
 }
 
@@ -318,22 +309,25 @@ func TestGroupRecordRedirect(t *testing.T) {
 	}
 	g.Add(getpidattr, writeattr)
 
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
 	ev, err := g.Open(perf.CallingThread, perf.AnyCPU)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer ev.Close()
 
-	counts, err := ev.MeasureGroup(func() {
+	gc, err := ev.MeasureGroup(func() {
 		getpidTrigger()
 		writeTrigger()
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, v := range counts.Values {
-		if v.Value != 1 {
-			t.Fatalf("want 1 hit for %q, got %d", v.Label, v.Value)
+	for _, got := range gc.Values {
+		if got.Value != 1 {
+			t.Fatalf("want 1 hit for %q, got %d", got.Label, got.Value)
 		}
 	}
 
@@ -350,7 +344,7 @@ func TestGroupRecordRedirect(t *testing.T) {
 	getpidip := getpidrec.(*perf.SampleGroupRecord).IP
 	writeip := writerec.(*perf.SampleGroupRecord).IP
 	if getpidip == writeip {
-		t.Fatalf("suspicious equal instruction pointers 0x%x for samples", getpidip)
+		t.Fatalf("equal instruction pointers 0x%x for samples of different events", getpidip)
 	}
 }
 
@@ -392,7 +386,7 @@ func TestRecordStack(t *testing.T) {
 
 	c, err := ev.Measure(func() {
 		n = runtime.Callers(2, pcs)
-		unix.Getpid()
+		getpidTrigger()
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -410,30 +404,6 @@ func TestRecordStack(t *testing.T) {
 		t.Fatal(err)
 	}
 	getpidsample := rec.(*perf.SampleRecord)
-
-	t.Log("sampled callchain:")
-	for _, pc := range getpidsample.Callchain {
-		fn := runtime.FuncForPC(uintptr(pc))
-		if fn == nil {
-			t.Logf("%#x: <nil>\n", pc)
-		} else {
-			file, line := fn.FileLine(uintptr(pc))
-			t.Logf("%#x: %s:%d %s\n", pc, file, line, fn.Name())
-		}
-	}
-
-	t.Log()
-
-	t.Log("Go PCs:")
-	for _, pc := range pcs {
-		fn := runtime.FuncForPC(pc)
-		if fn == nil {
-			t.Logf("%#x: <nil>\n", pc)
-		} else {
-			file, line := fn.FileLine(pc)
-			t.Logf("%#x: %s:%d %s\n", pc, file, line, fn.Name())
-		}
-	}
 
 	i := len(pcs) - 1
 	j := len(getpidsample.Callchain) - 1

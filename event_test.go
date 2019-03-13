@@ -5,17 +5,71 @@
 package perf_test
 
 import (
-	"fmt"
 	"os"
 	"runtime"
 	"testing"
-	"time"
 
 	"acln.ro/perf"
-	"acln.ro/perf/internal/testasm"
 
 	"golang.org/x/sys/unix"
 )
+
+func TestHardwareCounters(t *testing.T) {
+	var g perf.Group
+	g.Add(perf.CPUCycles, perf.Instructions)
+
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	hw, err := g.Open(perf.CallingThread, perf.AnyCPU)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var sum int64
+	gc, err := hw.MeasureGroup(func() {
+		for i := int64(0); i < 1000000; i++ {
+			sum += i
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range gc.Values {
+		if c.Value == 0 {
+			t.Fatalf("didn't count %q", c.Label)
+		}
+	}
+}
+
+var fault []byte
+
+func TestSoftwareCounters(t *testing.T) {
+	pfa := new(perf.Attr)
+	perf.PageFaults.Configure(pfa)
+
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	faults, err := perf.Open(pfa, perf.CallingThread, perf.AnyCPU, nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	runtime.GC()
+
+	c, err := faults.Measure(func() {
+		fault = make([]byte, 64*1024*1024)
+		fault[0] = 1
+		fault[63*1024*1024] = 1
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Value == 0 {
+		t.Fatal("didn't see a page fault")
+	}
+}
 
 type singleTracepointTest struct {
 	category string
@@ -24,29 +78,29 @@ type singleTracepointTest struct {
 }
 
 func (tt singleTracepointTest) run(t *testing.T) {
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-
 	tp := perf.Tracepoint(tt.category, tt.event)
 	attr := new(perf.Attr)
 	if err := tp.Configure(attr); err != nil {
-		t.Fatalf("Configure: %v", err)
+		t.Fatal(err)
 	}
+
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 
 	ev, err := perf.Open(attr, perf.CallingThread, perf.AnyCPU, nil, 0)
 	if err != nil {
-		t.Fatalf("Open: %v", err)
+		t.Fatal(err)
 	}
 	defer ev.Close()
 
-	count, err := ev.Measure(func() {
+	c, err := ev.Measure(func() {
 		tt.trigger()
 	})
 	if err != nil {
-		t.Fatalf("Measure: %v", err)
+		t.Fatal(err)
 	}
-	if count.Value != 1 {
-		t.Fatalf("got %d hits for %q, want 1 hit", count.Value, count.Label)
+	if c.Value != 1 {
+		t.Fatalf("got %d hits for %q, want 1 hit", c.Value, c.Label)
 	}
 }
 
@@ -100,146 +154,4 @@ func writeTrigger() {
 	if _, err := null.Write([]byte("big data")); err != nil {
 		panic(err)
 	}
-}
-
-func TestSumIPC(t *testing.T) {
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-
-	insns := new(perf.Attr)
-	perf.Instructions.Configure(insns)
-	insns.CountFormat = perf.CountFormat{
-		Enabled: true,
-		Running: true,
-		Group:   true,
-		ID:      true,
-	}
-	insns.Options = perf.Options{
-		Disabled: true,
-	}
-
-	cycles := new(perf.Attr)
-	perf.CPUCycles.Configure(cycles)
-
-	iev, err := perf.Open(insns, perf.CallingThread, perf.AnyCPU, nil, 0)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	defer iev.Close()
-
-	cev, err := perf.Open(cycles, perf.CallingThread, perf.AnyCPU, iev, 0)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	defer cev.Close()
-
-	Nvalues := []uint64{
-		1,
-		10,
-		100,
-		1000,
-		10000,
-		100000,
-		1000000,
-		10000000,
-		100000000,
-		1000000000,
-	}
-	for _, N := range Nvalues {
-		counts, err := iev.MeasureGroup(func() {
-			testasm.SumN(N)
-		})
-		if err != nil {
-			t.Fatalf("ReadGroupCount: %v", err)
-		}
-		instructions := counts.Values[0].Value
-		cycles := counts.Values[1].Value
-		ipc := sumIPC{
-			N:            N,
-			instructions: instructions,
-			cycles:       cycles,
-			ipc:          float64(instructions) / float64(cycles),
-			running:      counts.TimeRunning,
-		}
-		_ = ipc // TODO(acln): find a way to test these values
-	}
-}
-
-type sumIPC struct {
-	N            uint64
-	instructions uint64
-	cycles       uint64
-	ipc          float64
-	running      time.Duration
-}
-
-func (i sumIPC) String() string {
-	return fmt.Sprintf("N = %11d | instructions = %11d | ipc = %6.3f | %v", i.N, i.instructions, i.ipc, i.running)
-}
-
-func TestSumOverhead(t *testing.T) {
-	attr := new(perf.Attr)
-	perf.Instructions.Configure(attr)
-	attr.CountFormat = perf.CountFormat{
-		Enabled: true,
-		Running: true,
-		ID:      true,
-	}
-	attr.Options = perf.Options{
-		Disabled: true,
-	}
-
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-
-	ev, err := perf.Open(attr, perf.CallingThread, perf.AnyCPU, nil, 0)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	defer ev.Close()
-
-	Nvalues := []uint64{
-		1,
-		10,
-		100,
-		1000,
-		10000,
-		100000,
-		1000000,
-		10000000,
-		100000000,
-		1000000000,
-	}
-	for _, N := range Nvalues {
-		count, err := ev.Measure(func() {
-			testasm.SumN(N)
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		ideal := 5 + 4*N
-		if count.Value < ideal {
-			t.Fatalf("got count %d with ideal %d", count.Value, ideal)
-		}
-		o := sumOverhead{
-			N:        N,
-			got:      count.Value,
-			ideal:    ideal,
-			overhead: float64(count.Value) / float64(ideal),
-			running:  count.Running,
-		}
-		_ = o // TODO(acln): find a way to test these values
-	}
-}
-
-type sumOverhead struct {
-	N        uint64
-	got      uint64
-	ideal    uint64
-	overhead float64
-	running  time.Duration
-}
-
-func (o sumOverhead) String() string {
-	return fmt.Sprintf("N = %11d | instructions = %11d | overhead = %10.6f | %v", o.N, o.got, o.overhead, o.running)
 }
