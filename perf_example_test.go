@@ -25,7 +25,7 @@ func ExampleEvent_Measure_hardware() {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	ev, err := perf.Open(cyclesattr, perf.CallingThread, perf.AnyCPU, nil, 0)
+	ev, err := perf.Open(cyclesattr, perf.CallingThread, perf.AnyCPU, nil)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -55,7 +55,7 @@ func ExampleEvent_Measure_tracepoint() {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	ev, err := perf.Open(getpidattr, perf.CallingThread, perf.AnyCPU, nil, 0)
+	ev, err := perf.Open(getpidattr, perf.CallingThread, perf.AnyCPU, nil)
 	if err != nil {
 		log.Fatal(err)
 	}

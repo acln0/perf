@@ -27,19 +27,19 @@ func testOpenBadGroup(t *testing.T) {
 	perf.CPUCycles.Configure(ca)
 	ca.CountFormat.Group = true
 
-	cycles, err := perf.Open(ca, perf.CallingThread, perf.AnyCPU, nil, 0)
+	cycles, err := perf.Open(ca, perf.CallingThread, perf.AnyCPU, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	cycles.Close()
 
-	_, err = perf.Open(ca, perf.CallingThread, perf.AnyCPU, cycles, 0)
+	_, err = perf.Open(ca, perf.CallingThread, perf.AnyCPU, cycles)
 	if err == nil {
 		t.Fatal("successful Open with closed group *Event")
 	}
 
 	cycles = new(perf.Event) // uninitialized
-	_, err = perf.Open(ca, perf.CallingThread, perf.AnyCPU, cycles, 0)
+	_, err = perf.Open(ca, perf.CallingThread, perf.AnyCPU, cycles)
 	if err == nil {
 		t.Fatal("successful Open with closed group *Event")
 	}
@@ -50,7 +50,7 @@ func testOpenBadAttrType(t *testing.T) {
 		Type: 42,
 	}
 
-	_, err := perf.Open(a, perf.CallingThread, perf.AnyCPU, nil, 0)
+	_, err := perf.Open(a, perf.CallingThread, perf.AnyCPU, nil)
 	if err == nil {
 		t.Fatal("got a valid *Event for bad Attr.Type 42")
 	}
@@ -65,7 +65,7 @@ func testOpenPopulatesLabel(t *testing.T) {
 		Config: uint64(perf.CPUCycles),
 	}
 
-	cycles, err := perf.Open(ca, perf.CallingThread, perf.AnyCPU, nil, 0)
+	cycles, err := perf.Open(ca, perf.CallingThread, perf.AnyCPU, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +122,7 @@ func TestCountPageFaults(t *testing.T) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	faults, err := perf.Open(pfa, perf.CallingThread, perf.AnyCPU, nil, 0)
+	faults, err := perf.Open(pfa, perf.CallingThread, perf.AnyCPU, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +153,7 @@ func TestCountFormatID(t *testing.T) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	faults, err := perf.Open(pfa, perf.CallingThread, perf.AnyCPU, nil, 0)
+	faults, err := perf.Open(pfa, perf.CallingThread, perf.AnyCPU, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,7 +196,7 @@ func (tt singleTracepointTest) run(t *testing.T) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	ev, err := perf.Open(attr, perf.CallingThread, perf.AnyCPU, nil, 0)
+	ev, err := perf.Open(attr, perf.CallingThread, perf.AnyCPU, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

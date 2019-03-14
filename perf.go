@@ -25,7 +25,7 @@ Attr is a low level configuration structure:
 		},
 	}
 
-	faults, err := perf.Open(fattr, perf.CallingThread, perf.AnyCPU, nil, 0)
+	faults, err := perf.Open(fattr, perf.CallingThread, perf.AnyCPU, nil)
 	// ...
 	c, err := faults.Measure(func() { ... })
 
@@ -56,7 +56,7 @@ Tracepoints are also supported:
 	writetp := perf.Tracepoint("syscalls", "sys_enter_write")
 	writetp.Configure(wattr)
 
-	writes, err := perf.Open(wattr, targetpid, perf.AnyCPU, nil, 0)
+	writes, err := perf.Open(wattr, targetpid, perf.AnyCPU, nil)
 	// ...
 	c, err := writes.Measure(func() { ... })
 

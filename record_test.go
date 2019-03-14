@@ -30,7 +30,7 @@ func TestPollTimeout(t *testing.T) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	getpid, err := perf.Open(ga, perf.CallingThread, perf.AnyCPU, nil, 0)
+	getpid, err := perf.Open(ga, perf.CallingThread, perf.AnyCPU, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func TestSampleGetpid(t *testing.T) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	getpid, err := perf.Open(ga, perf.CallingThread, perf.AnyCPU, nil, 0)
+	getpid, err := perf.Open(ga, perf.CallingThread, perf.AnyCPU, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +135,7 @@ func TestConcurrentSampling(t *testing.T) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	getpid, err := perf.Open(ga, perf.CallingThread, perf.AnyCPU, nil, 0)
+	getpid, err := perf.Open(ga, perf.CallingThread, perf.AnyCPU, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +206,7 @@ func TestRecordRedirectManualWire(t *testing.T) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	leader, err := perf.Open(attr, perf.CallingThread, perf.AnyCPU, nil, 0)
+	leader, err := perf.Open(attr, perf.CallingThread, perf.AnyCPU, nil)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -229,7 +229,7 @@ func TestRecordRedirectManualWire(t *testing.T) {
 		Addr: true,
 	}
 
-	follower, err := perf.Open(attr, perf.CallingThread, perf.AnyCPU, leader, 0)
+	follower, err := perf.Open(attr, perf.CallingThread, perf.AnyCPU, leader)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -383,7 +383,7 @@ func TestRecordStack(t *testing.T) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	ev, err := perf.Open(getpidattr, perf.CallingThread, perf.AnyCPU, nil, 0)
+	ev, err := perf.Open(getpidattr, perf.CallingThread, perf.AnyCPU, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

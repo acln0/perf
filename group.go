@@ -66,7 +66,7 @@ func (g *Group) Open(pid int, cpu int) (*Event, error) {
 	leaderattr := g.attrs[0]
 	leaderattr.CountFormat = g.CountFormat
 	leaderattr.CountFormat.Group = true
-	leader, err := Open(leaderattr, pid, cpu, nil, 0)
+	leader, err := Open(leaderattr, pid, cpu, nil)
 	if err != nil {
 		return nil, fmt.Errorf("perf: failed to open event leader: %v", err)
 	}
@@ -79,7 +79,7 @@ func (g *Group) Open(pid int, cpu int) (*Event, error) {
 		}
 	}
 	for idx, attr := range g.attrs[1:] {
-		follower, err := Open(attr, pid, cpu, leader, 0)
+		follower, err := Open(attr, pid, cpu, leader)
 		if err != nil {
 			leader.Close()
 			return nil, fmt.Errorf("perf: failed to open group event #%d (%q): %v", idx, attr.Label, err)

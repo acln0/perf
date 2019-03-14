@@ -34,26 +34,6 @@ const (
 // AnyCPU configures the specified process/thread to be measured on any CPU.
 const AnyCPU = -1
 
-// Flag is a set of flags for Open. Values are or-ed together.
-type Flag int
-
-// Flags for calls to Open.
-const (
-	// PidCGroup activates per-container system-wide monitoring. In this
-	// case, a file descriptor opened on /dev/group/<x> must be passed
-	// as the pid parameter. Consult the perf_event_open man page for
-	// more details.
-	PidCGroup Flag = unix.PERF_FLAG_PID_CGROUP
-
-	// PERF_FLAG_FD_OUTPUT is broken, so we don't expose it, and we don't
-	// expose PERF_FLAG_FD_NO_GROUP either. People should use SetOutput.
-
-	// cloexec configures the event file descriptor to be opened in
-	// close-on-exec mode. Package perf sets this flag by default on
-	// all file descriptors.
-	cloexec Flag = unix.PERF_FLAG_FD_CLOEXEC
-)
-
 // Event states.
 const (
 	eventStateUninitialized = 0
@@ -130,10 +110,20 @@ const numRingPages = 128
 //     * finally, the pid == AllThreads and cpu == AnyCPU setting is invalid
 //
 // If group is non-nil, the returned Event is made part of the group
-// associated with the specified group Event. If group is non-nil, and
-// FlagNoGroup | FlagFDOutput are not set, the attr.Options.Disabled setting
-// is ignored: the group leader controls when the entire group is enabled.
-func Open(attr *Attr, pid, cpu int, group *Event, flags Flag) (*Event, error) {
+// associated with the specified group Event.
+func Open(a *Attr, pid, cpu int, group *Event) (*Event, error) {
+	return open(a, pid, cpu, group, 0)
+}
+
+// OpenCGroup is like Open, but activates per-container system-wide
+// monitoring. If cgroupfs is mounted on /dev/cgroup, and the group to
+// monitor is called "test", then cgroupfd must be a file descriptor opened
+// on /dev/cgroup/test.
+func OpenCGroup(a *Attr, cgroupfd, cpu int, group *Event) (*Event, error) {
+	return open(a, cgroupfd, cpu, group, unix.PERF_FLAG_PID_CGROUP)
+}
+
+func open(a *Attr, pid, cpu int, group *Event, flags int) (*Event, error) {
 	groupfd := -1
 	if group != nil {
 		if err := group.ok(); err != nil {
@@ -142,8 +132,8 @@ func Open(attr *Attr, pid, cpu int, group *Event, flags Flag) (*Event, error) {
 		groupfd = group.perffd
 	}
 
-	flags |= cloexec
-	fd, err := unix.PerfEventOpen(attr.sysAttr(), pid, cpu, groupfd, int(flags))
+	flags |= unix.PERF_FLAG_FD_CLOEXEC
+	fd, err := unix.PerfEventOpen(a.sysAttr(), pid, cpu, groupfd, flags)
 	if err != nil {
 		return nil, os.NewSyscallError("perf_event_open", err)
 	}
@@ -152,20 +142,22 @@ func Open(attr *Attr, pid, cpu int, group *Event, flags Flag) (*Event, error) {
 		return nil, os.NewSyscallError("setnonblock", err)
 	}
 
-	attrClone := new(Attr)
-	*attrClone = *attr // ok to copy since no slices
-	if attrClone.Label == "" {
+	// Clone the *Attr so the caller can't change it from under our feet.
+
+	ac := new(Attr)
+	*ac = *a // ok to copy since no slices
+	if ac.Label == "" {
 		evID := eventID{
-			Type:   uint64(attr.Type),
-			Config: uint64(attr.Config),
+			Type:   uint64(a.Type),
+			Config: uint64(a.Config),
 		}
-		attrClone.Label = lookupLabel(evID).Name
+		ac.Label = lookupLabel(evID).Name
 	}
 
 	ev := &Event{
 		state:  eventStateOK,
 		perffd: fd,
-		attr:   attrClone,
+		attr:   ac,
 	}
 	if group != nil {
 		group.group = append(group.group, ev)
