@@ -6,8 +6,19 @@ package perf_test
 
 import (
 	"fmt"
+	"os"
 	"testing"
+
+	"acln.ro/perf"
 )
+
+func TestMain(m *testing.M) {
+	if !perf.Supported() {
+		fmt.Fprintln(os.Stderr, "perf_event_open not supported")
+		os.Exit(2)
+	}
+	os.Exit(m.Run())
+}
 
 // paranoid specifies a perf_event_paranoid level requirement for a test.
 //

@@ -65,9 +65,27 @@ For more detailed information, see the examples, and man 2 perf_event_open.
 package perf
 
 import (
+	"os"
 	"time"
 	"unsafe"
 )
+
+// Supported returns a boolean indicating whether the host kernel supports
+// the perf_event_open system call, which is a prerequisite for the operations
+// of this package.
+func Supported() bool {
+	// The man page says:
+	//
+	// "The existence of the perf_event_paranoid file is the official
+	// method for determining if a kernel supports perf_event_open()."
+	//
+	// so this is what we do.
+	_, err := os.Stat("/proc/sys/kernel/perf_event_paranoid")
+	if err != nil {
+		return false
+	}
+	return true
+}
 
 // fields is a collection of 32-bit or 64-bit fields.
 type fields []byte
