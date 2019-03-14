@@ -383,20 +383,20 @@ func TestRecordStack(t *testing.T) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	ev, err := perf.Open(getpidattr, perf.CallingThread, perf.AnyCPU, nil)
+	getpid, err := perf.Open(getpidattr, perf.CallingThread, perf.AnyCPU, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ev.Close()
+	defer getpid.Close()
 
-	if err := ev.MapRing(); err != nil {
+	if err := getpid.MapRing(); err != nil {
 		t.Fatal(err)
 	}
 
 	pcs := make([]uintptr, 10)
 	var n int
 
-	c, err := ev.Measure(func() {
+	c, err := getpid.Measure(func() {
 		n = runtime.Callers(2, pcs)
 		getpidTrigger()
 	})
@@ -411,11 +411,14 @@ func TestRecordStack(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
-	rec, err := ev.ReadRecord(ctx)
+	rec, err := getpid.ReadRecord(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	getpidsample := rec.(*perf.SampleRecord)
+	getpidsample, ok := rec.(*perf.SampleRecord)
+	if !ok {
+		t.Fatalf("got a %T, want a *SampleRecord", rec)
+	}
 
 	i := len(pcs) - 1
 	j := len(getpidsample.Callchain) - 1
