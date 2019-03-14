@@ -153,6 +153,7 @@ func testPageFaults(t *testing.T) {
 	if c.Value == 0 {
 		t.Fatal("didn't see a page fault")
 	}
+	t.Logf("saw %d page faults", c.Value)
 }
 
 func TestCountFormatID(t *testing.T) {

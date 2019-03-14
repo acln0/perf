@@ -429,4 +429,26 @@ func TestRecordStack(t *testing.T) {
 		i--
 		j--
 	}
+
+	logFrame := func(pc uintptr) {
+		fn := runtime.FuncForPC(pc)
+		if fn == nil {
+			t.Logf("%#x <nil>", pc)
+		} else {
+			file, line := fn.FileLine(pc)
+			t.Logf("%#x %s:%d %s", pc, file, line, fn.Name())
+		}
+	}
+
+	t.Log("kernel callchain:")
+	for _, kpc := range getpidsample.Callchain {
+		logFrame(uintptr(kpc))
+	}
+
+	t.Log()
+
+	t.Logf("Go stack:")
+	for _, gopc := range pcs {
+		logFrame(gopc)
+	}
 }
