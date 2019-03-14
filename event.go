@@ -765,10 +765,10 @@ func (a *Attr) SetWakeupWatermark(n uint32) {
 	a.Options.Watermark = true
 }
 
-// ProbePMU probes /sys/bus/event_source/devices/<device>/type for the
-// EventType value associated with the specified PMU.
-func ProbePMU(device string) (EventType, error) {
-	p := filepath.Join("/sys/bus/event_source/devices", device, "type")
+// LookupEventType probes /sys/bus/event_source/devices/<device>/type
+// for the EventType value associated with the specified PMU.
+func LookupEventType(pmu string) (EventType, error) {
+	p := filepath.Join("/sys/bus/event_source/devices", pmu, "type")
 	content, err := ioutil.ReadFile(p)
 	if err != nil {
 		return 0, err

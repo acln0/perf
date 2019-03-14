@@ -109,7 +109,7 @@ func (env *perfTestEnv) havePMU(u string) (bool, error) {
 		return false, err
 	}
 
-	_, err := perf.ProbePMU(u)
+	_, err := perf.LookupEventType(u)
 	if err != nil {
 		env.pmu.missing[u] = err
 		return false, err
