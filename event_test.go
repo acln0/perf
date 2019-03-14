@@ -83,8 +83,12 @@ func testOpenPopulatesLabel(t *testing.T) {
 func TestHardwareCounters(t *testing.T) {
 	requires(t, paranoid(1), hardwarePMU)
 
+	t.Run("IPC", testIPC)
+}
+
+func testIPC(t *testing.T) {
 	var g perf.Group
-	g.Add(perf.CPUCycles, perf.Instructions)
+	g.Add(perf.Instructions, perf.CPUCycles)
 
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
@@ -109,13 +113,21 @@ func TestHardwareCounters(t *testing.T) {
 			t.Fatalf("didn't count %q", c.Label)
 		}
 	}
+	insns := gc.Values[0].Value
+	cycles := gc.Values[1].Value
+	ipc := float64(insns) / float64(cycles)
+	t.Logf("got %d instructions, %d cycles: %f IPC", insns, cycles, ipc)
+}
+
+func TestSoftwareCounters(t *testing.T) {
+	requires(t, paranoid(1), softwarePMU)
+
+	t.Run("PageFaults", testPageFaults)
 }
 
 var fault []byte
 
-func TestCountPageFaults(t *testing.T) {
-	requires(t, paranoid(1), softwarePMU)
-
+func testPageFaults(t *testing.T) {
 	pfa := new(perf.Attr)
 	perf.PageFaults.Configure(pfa)
 

@@ -13,8 +13,11 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"unsafe"
 
 	"acln.ro/perf"
+
+	"golang.org/x/sys/unix"
 )
 
 func TestMain(m *testing.M) {
@@ -28,6 +31,11 @@ func TestMain(m *testing.M) {
 // perfTestEnv holds and caches information about the testing environment
 // for package perf.
 type perfTestEnv struct {
+	cap struct {
+		sync.Once
+		sysadmin bool
+	}
+
 	paranoid struct {
 		sync.Once
 		value int
@@ -44,6 +52,43 @@ type perfTestEnv struct {
 		sync.Mutex
 		ok      map[string]struct{}
 		missing map[string]error
+	}
+}
+
+func (env *perfTestEnv) capSysAdmin() bool {
+	env.cap.Once.Do(env.initCap)
+	return env.cap.sysadmin
+}
+
+type capHeader struct {
+	version uint32
+	pid     int32
+}
+
+type capData struct {
+	effective   uint32
+	permitted   uint32
+	inheritable uint32
+}
+
+// constants from uapi/linux/capability.h
+const (
+	capSysAdmin = 21
+	capV3       = 0x20080522
+)
+
+func (env *perfTestEnv) initCap() {
+	header := &capHeader{
+		version: capV3,
+		pid:     int32(unix.Getpid()),
+	}
+	data := make([]capData, 2)
+	_, _, e := unix.Syscall(unix.SYS_CAPGET, uintptr(unsafe.Pointer(header)), uintptr(unsafe.Pointer(&data[0])), 0)
+	if e != 0 {
+		return
+	}
+	if data[0].effective&(1<<capSysAdmin) != 0 {
+		env.cap.sysadmin = true
 	}
 }
 
@@ -128,6 +173,9 @@ var testenv perfTestEnv
 type paranoid int
 
 func (p paranoid) Evaluate() error {
+	if testenv.capSysAdmin() {
+		return nil
+	}
 	want, have := int(p), testenv.paranoidLevel()
 	if have > want {
 		return fmt.Errorf("want perf_event_paranoid <= %d, have %d", want, have)
