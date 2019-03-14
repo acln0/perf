@@ -81,10 +81,7 @@ func Supported() bool {
 	//
 	// so this is what we do.
 	_, err := os.Stat("/proc/sys/kernel/perf_event_paranoid")
-	if err != nil {
-		return false
-	}
-	return true
+	return err == nil
 }
 
 // fields is a collection of 32-bit or 64-bit fields.

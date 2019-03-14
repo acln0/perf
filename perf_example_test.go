@@ -72,8 +72,7 @@ func ExampleEvent_Measure_tracepoint() {
 		log.Fatal(err)
 	}
 
-	fmt.Printf("saw getpid(2) %d times", c.Value)
-	// Output: saw getpid(2) 3 times
+	fmt.Printf("saw getpid(2) %d times", c.Value) // should print 3
 }
 
 func ExampleEvent_MeasureGroup_hardware() {

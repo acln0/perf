@@ -705,6 +705,22 @@ func (a *Attr) SetWakeupWatermark(n uint32) {
 	a.Options.Watermark = true
 }
 
+// ProbePMU probes /sys/bus/event_source/devices/<device>/type for the
+// EventType value associated with the specified PMU.
+func ProbePMU(device string) (EventType, error) {
+	p := filepath.Join("/sys/bus/event_source/devices", device, "type")
+	content, err := ioutil.ReadFile(p)
+	if err != nil {
+		return 0, err
+	}
+	nr := strings.TrimSpace(string(content)) // remove trailing newline
+	et, err := strconv.ParseUint(nr, 10, 32)
+	if err != nil {
+		return 0, err
+	}
+	return EventType(et), nil
+}
+
 // EventType is the overall type of a performance event.
 type EventType uint32
 
@@ -717,22 +733,6 @@ const (
 	RawEvent           EventType = unix.PERF_TYPE_RAW
 	BreakpointEvent    EventType = unix.PERF_TYPE_BREAKPOINT
 )
-
-// ProbePMU probes /sys/bus/event_source/devices/<name>/type for the EventType
-// value associated with the specified PMU.
-func ProbePMU(name string) (EventType, error) {
-	p := filepath.Join("/sys/bus/event_source/devices", name, "type")
-	content, err := ioutil.ReadFile(p)
-	if err != nil {
-		return 0, err
-	}
-	nr := strings.TrimSpace(string(content)) // remove trailing newline
-	et, err := strconv.ParseUint(nr, 10, 32)
-	if err != nil {
-		return 0, err
-	}
-	return EventType(et), nil
-}
 
 // HardwareCounter is a hardware performance counter.
 type HardwareCounter uint64
