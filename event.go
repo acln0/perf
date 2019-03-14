@@ -57,9 +57,10 @@ type Event struct {
 	// has no access to. The Event owns them all, Close closes them all.
 	owned []*Event
 
-	// attr is the set of attributes the Event was configured with.
-	// It is a clone of the original.
-	attr *Attr
+	// a is the set of attributes the Event was configured with. It is
+	// a clone of the original, save for the Label field, which may have
+	// been set, if the original *Attr didn't set it.
+	a *Attr
 
 	// ring is the (entire) memory mapped ring buffer.
 	ring []byte
@@ -157,7 +158,7 @@ func open(a *Attr, pid, cpu int, group *Event, flags int) (*Event, error) {
 	ev := &Event{
 		state:  eventStateOK,
 		perffd: fd,
-		attr:   ac,
+		a:      ac,
 	}
 	if group != nil {
 		group.group = append(group.group, ev)
@@ -488,12 +489,12 @@ func (ev *Event) ReadCount() (Count, error) {
 	if err := ev.ok(); err != nil {
 		return c, err
 	}
-	if ev.attr.CountFormat.Group {
+	if ev.a.CountFormat.Group {
 		return c, errors.New("calling ReadCount on group Event")
 	}
 
 	// TODO(acln): use rdpmc on x86 instead of read(2)?
-	buf := make([]byte, ev.attr.CountFormat.readSize())
+	buf := make([]byte, ev.a.CountFormat.readSize())
 	_, err := unix.Read(ev.perffd, buf)
 	if err != nil {
 		return c, os.NewSyscallError("read", err)
@@ -501,7 +502,7 @@ func (ev *Event) ReadCount() (Count, error) {
 
 	f := fields(buf)
 	f.count(&c, ev)
-	c.Label = ev.attr.Label
+	c.Label = ev.a.Label
 
 	return c, err
 }
@@ -565,12 +566,12 @@ func (ev *Event) ReadGroupCount() (GroupCount, error) {
 	if err := ev.ok(); err != nil {
 		return gc, err
 	}
-	if !ev.attr.CountFormat.Group {
+	if !ev.a.CountFormat.Group {
 		return gc, errors.New("calling ReadGroupCount on non-group Event")
 	}
 
-	headerSize := ev.attr.CountFormat.groupReadHeaderSize()
-	countsSize := (1 + len(ev.group)) * ev.attr.CountFormat.groupReadCountSize()
+	headerSize := ev.a.CountFormat.groupReadHeaderSize()
+	countsSize := (1 + len(ev.group)) * ev.a.CountFormat.groupReadCountSize()
 	buf := make([]byte, headerSize+countsSize)
 	_, err := unix.Read(ev.perffd, buf)
 	if err != nil {
@@ -579,9 +580,9 @@ func (ev *Event) ReadGroupCount() (GroupCount, error) {
 
 	f := fields(buf)
 	f.groupCount(&gc, ev)
-	gc.Values[0].Label = ev.attr.Label
+	gc.Values[0].Label = ev.a.Label
 	for i := 0; i < len(ev.group); i++ {
-		gc.Values[i+1].Label = ev.group[i].attr.Label
+		gc.Values[i+1].Label = ev.group[i].a.Label
 	}
 
 	return gc, nil
@@ -630,6 +631,8 @@ type Attr struct {
 	// overflow packets, based on Options.Freq: if Options.Freq is set,
 	// Sample is interpreted as "sample frequency", otherwise it is
 	// interpreted as "sample period".
+	//
+	// See also SetSample{Period,Freq}.
 	Sample uint64
 
 	// SampleFormat configures information requested in sample records,
@@ -644,9 +647,12 @@ type Attr struct {
 	// Options contains more fine grained event configuration.
 	Options Options
 
-	// Wakeup configures event wakeup. If Options.Watermark is set,
-	// Wakeup is interpreted as the number of bytes before wakeup.
-	// Otherwise, it is interpreted as "wake up every n events".
+	// Wakeup configures wakeups on the ring buffer associated with the
+	// event. If Options.Watermark is set, Wakeup is interpreted as the
+	// number of bytes before wakeup. Otherwise, it is interpreted as
+	// "wake up every N events".
+	//
+	// See also SetWakeup{Events,Watermark}.
 	Wakeup uint32
 
 	// BreakpointType is the breakpoint type, if Type == BreakpointEvent.
@@ -656,16 +662,15 @@ type Attr struct {
 	// do not fit in the regular config field.
 	//
 	// For breakpoint events, Config1 is the breakpoint address.
-	// For kprobes, Config1 is the kprobe function. For uprobes, Config1
-	// is the uprobe path.
+	// For kprobes, it is the kprobe function. For uprobes, it is the
+	// uprobe path.
 	Config1 uint64
 
 	// Config2 is a further extension of the Config1 field.
 	//
-	// For breakpoint events, Config2 is the length of the breakpoint.
-	// For kprobes, when the kprobe function is NULL, Config2 is the
-	// address of the kprobe. For both kprobes and uprobes, Config2 is
-	// the probe offset.
+	// For breakpoint events, it is the length of the breakpoint.
+	// For kprobes, when the kprobe function is NULL, it is the address of
+	// the kprobe. For both kprobes and uprobes, it is the probe offset.
 	Config2 uint64
 
 	// BranchSampleFormat specifies what branches to include in the
@@ -680,6 +685,11 @@ type Attr struct {
 
 	// ClockID is the clock ID to use with samples, if Options.UseClockID
 	// is set.
+	//
+	// TODO(acln): What are the values for this? CLOCK_MONOTONIC and such?
+	// Investigate. Can we choose a clock that can be compared to Go's
+	// clock in a meaningful way? If so, should we add special support
+	// for that?
 	ClockID int32
 
 	// SampleRegistersIntr is the set of register to dump for each sample.
@@ -689,8 +699,8 @@ type Attr struct {
 	// AuxWatermark is the watermark for the aux area.
 	AuxWatermark uint32
 
-	// SampleMaxStack is the maximum number of frame pointers in a call
-	// chain. It should be < /proc/sys/kernel/perf_event_max_stack.
+	// SampleMaxStack is the maximum number of frame pointers in a
+	// callchain. The value must be < MaxStack().
 	SampleMaxStack uint16
 }
 
@@ -963,7 +973,8 @@ func AllCacheOpResults() []CacheOpResult {
 }
 
 // A HardwareCacheCounter groups a cache, a cache operation, and an operation
-// result.
+// result. It measures the number of results for the specified op, on the
+// specified cache.
 type HardwareCacheCounter struct {
 	Cache  Cache
 	Op     CacheOp

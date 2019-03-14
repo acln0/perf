@@ -65,7 +65,9 @@ For more detailed information, see the examples, and man 2 perf_event_open.
 package perf
 
 import (
+	"io/ioutil"
 	"os"
+	"strconv"
 	"time"
 	"unsafe"
 )
@@ -82,6 +84,20 @@ func Supported() bool {
 	// so this is what we do.
 	_, err := os.Stat("/proc/sys/kernel/perf_event_paranoid")
 	return err == nil
+}
+
+// MaxStack returns the maximum number of frame pointers in a recorded
+// callchain. It reads the value from /proc/sys/kernel/perf_event_max_stack.
+func MaxStack() (uint16, error) {
+	content, err := ioutil.ReadFile("/proc/sys/kernel/perf_event_max_stack")
+	if err != nil {
+		return 0, err
+	}
+	maxstack, err := strconv.ParseUint(string(content), 10, 16)
+	if err != nil {
+		return 0, err
+	}
+	return uint16(maxstack), nil
 }
 
 // fields is a collection of 32-bit or 64-bit fields.
@@ -152,37 +168,37 @@ func (f *fields) string(s *string) {
 
 // id decodes a RecordID based on the SampleFormat ev was configured with.
 func (f *fields) id(id *RecordID, ev *Event) {
-	if !ev.attr.Options.RecordIDAll {
+	if !ev.a.Options.RecordIDAll {
 		return
 	}
-	f.uint32Cond(ev.attr.SampleFormat.Tid, &id.Pid, &id.Tid)
-	f.uint64Cond(ev.attr.SampleFormat.Time, &id.Time)
-	f.uint64Cond(ev.attr.SampleFormat.ID, &id.ID)
-	f.uint64Cond(ev.attr.SampleFormat.StreamID, &id.StreamID)
-	f.uint32Cond(ev.attr.SampleFormat.CPU, &id.CPU, &id.Res)
-	f.uint64Cond(ev.attr.SampleFormat.Identifier, &id.Identifier)
+	f.uint32Cond(ev.a.SampleFormat.Tid, &id.Pid, &id.Tid)
+	f.uint64Cond(ev.a.SampleFormat.Time, &id.Time)
+	f.uint64Cond(ev.a.SampleFormat.ID, &id.ID)
+	f.uint64Cond(ev.a.SampleFormat.StreamID, &id.StreamID)
+	f.uint32Cond(ev.a.SampleFormat.CPU, &id.CPU, &id.Res)
+	f.uint64Cond(ev.a.SampleFormat.Identifier, &id.Identifier)
 }
 
 // count decodes a Count into c.
 func (f *fields) count(c *Count, ev *Event) {
 	f.uint64(&c.Value)
-	if ev.attr.CountFormat.Enabled {
+	if ev.a.CountFormat.Enabled {
 		f.duration(&c.Enabled)
 	}
-	if ev.attr.CountFormat.Running {
+	if ev.a.CountFormat.Running {
 		f.duration(&c.Running)
 	}
-	f.uint64Cond(ev.attr.CountFormat.ID, &c.ID)
+	f.uint64Cond(ev.a.CountFormat.ID, &c.ID)
 }
 
 // groupCount decodes a GroupCount into gc.
 func (f *fields) groupCount(gc *GroupCount, ev *Event) {
 	var nr uint64
 	f.uint64(&nr)
-	if ev.attr.CountFormat.Enabled {
+	if ev.a.CountFormat.Enabled {
 		f.duration(&gc.TimeEnabled)
 	}
-	if ev.attr.CountFormat.Running {
+	if ev.a.CountFormat.Running {
 		f.duration(&gc.TimeRunning)
 	}
 	gc.Values = make([]struct {
@@ -191,7 +207,7 @@ func (f *fields) groupCount(gc *GroupCount, ev *Event) {
 	}, nr)
 	for i := 0; i < int(nr); i++ {
 		f.uint64(&gc.Values[i].Value)
-		f.uint64Cond(ev.attr.CountFormat.ID, &gc.Values[i].ID)
+		f.uint64Cond(ev.a.CountFormat.ID, &gc.Values[i].ID)
 	}
 }
 

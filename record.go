@@ -470,14 +470,14 @@ var newRecordFuncs = [...]func(ev *Event) Record{
 }
 
 func newReadRecord(ev *Event) Record {
-	if ev.attr.CountFormat.Group {
+	if ev.a.CountFormat.Group {
 		return &ReadGroupRecord{}
 	}
 	return &ReadRecord{}
 }
 
 func newSampleRecord(ev *Event) Record {
-	if ev.attr.CountFormat.Group {
+	if ev.a.CountFormat.Group {
 		return &SampleGroupRecord{}
 	}
 	return &SampleRecord{}
@@ -716,19 +716,19 @@ type SampleRecord struct {
 func (sr *SampleRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	sr.RecordHeader = raw.Header
 	f := raw.fields()
-	f.uint64Cond(ev.attr.SampleFormat.Identifier, &sr.Identifier)
-	f.uint64Cond(ev.attr.SampleFormat.IP, &sr.IP)
-	f.uint32Cond(ev.attr.SampleFormat.Tid, &sr.Pid, &sr.Tid)
-	f.uint64Cond(ev.attr.SampleFormat.Time, &sr.Time)
-	f.uint64Cond(ev.attr.SampleFormat.Addr, &sr.Addr)
-	f.uint64Cond(ev.attr.SampleFormat.ID, &sr.ID)
-	f.uint64Cond(ev.attr.SampleFormat.StreamID, &sr.StreamID)
-	f.uint32Cond(ev.attr.SampleFormat.CPU, &sr.CPU, &sr.Res)
-	f.uint64Cond(ev.attr.SampleFormat.Period, &sr.Period)
-	if ev.attr.SampleFormat.Count {
+	f.uint64Cond(ev.a.SampleFormat.Identifier, &sr.Identifier)
+	f.uint64Cond(ev.a.SampleFormat.IP, &sr.IP)
+	f.uint32Cond(ev.a.SampleFormat.Tid, &sr.Pid, &sr.Tid)
+	f.uint64Cond(ev.a.SampleFormat.Time, &sr.Time)
+	f.uint64Cond(ev.a.SampleFormat.Addr, &sr.Addr)
+	f.uint64Cond(ev.a.SampleFormat.ID, &sr.ID)
+	f.uint64Cond(ev.a.SampleFormat.StreamID, &sr.StreamID)
+	f.uint32Cond(ev.a.SampleFormat.CPU, &sr.CPU, &sr.Res)
+	f.uint64Cond(ev.a.SampleFormat.Period, &sr.Period)
+	if ev.a.SampleFormat.Count {
 		f.count(&sr.Count, ev)
 	}
-	if ev.attr.SampleFormat.Callchain {
+	if ev.a.SampleFormat.Callchain {
 		var nr uint64
 		f.uint64(&nr)
 		sr.Callchain = make([]uint64, nr)
@@ -736,10 +736,10 @@ func (sr *SampleRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 			f.uint64(&sr.Callchain[i])
 		}
 	}
-	if ev.attr.SampleFormat.Raw {
+	if ev.a.SampleFormat.Raw {
 		f.uint32sizeBytes(&sr.Raw)
 	}
-	if ev.attr.SampleFormat.BranchStack {
+	if ev.a.SampleFormat.BranchStack {
 		var nr uint64
 		f.uint64(&nr)
 		sr.BranchStack = make([]BranchEntry, nr)
@@ -760,40 +760,40 @@ func (sr *SampleRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 			}
 		}
 	}
-	if ev.attr.SampleFormat.UserRegisters {
+	if ev.a.SampleFormat.UserRegisters {
 		f.uint64(&sr.UserRegisterABI)
-		num := bits.OnesCount64(ev.attr.SampleRegistersUser)
+		num := bits.OnesCount64(ev.a.SampleRegistersUser)
 		sr.UserRegisters = make([]uint64, num)
 		for i := 0; i < len(sr.UserRegisters); i++ {
 			f.uint64(&sr.UserRegisters[i])
 		}
 	}
-	if ev.attr.SampleFormat.UserStack {
+	if ev.a.SampleFormat.UserStack {
 		f.uint64sizeBytes(&sr.UserStack)
 		if len(sr.UserStack) > 0 {
 			f.uint64(&sr.UserStackDynamicSize)
 		}
 	}
-	f.uint64Cond(ev.attr.SampleFormat.Weight, &sr.Weight)
-	if ev.attr.SampleFormat.DataSource {
+	f.uint64Cond(ev.a.SampleFormat.Weight, &sr.Weight)
+	if ev.a.SampleFormat.DataSource {
 		var ds uint64
 		f.uint64(&ds)
 		sr.DataSource = DataSource(ds)
 	}
-	if ev.attr.SampleFormat.Transaction {
+	if ev.a.SampleFormat.Transaction {
 		var tx uint64
 		f.uint64(&tx)
 		sr.Transaction = Transaction(tx)
 	}
-	if ev.attr.SampleFormat.IntrRegisters {
+	if ev.a.SampleFormat.IntrRegisters {
 		f.uint64(&sr.IntrRegisterABI)
-		num := bits.OnesCount64(ev.attr.SampleRegistersIntr)
+		num := bits.OnesCount64(ev.a.SampleRegistersIntr)
 		sr.IntrRegisters = make([]uint64, num)
 		for i := 0; i < len(sr.IntrRegisters); i++ {
 			f.uint64(&sr.IntrRegisters[i])
 		}
 	}
-	f.uint64Cond(ev.attr.SampleFormat.PhysicalAddress, &sr.PhysicalAddress)
+	f.uint64Cond(ev.a.SampleFormat.PhysicalAddress, &sr.PhysicalAddress)
 }
 
 // exactIPBit is PERF_RECORD_MISC_EXACT_IP
@@ -846,19 +846,19 @@ type SampleGroupRecord struct {
 func (sr *SampleGroupRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	sr.RecordHeader = raw.Header
 	f := raw.fields()
-	f.uint64Cond(ev.attr.SampleFormat.Identifier, &sr.Identifier)
-	f.uint64Cond(ev.attr.SampleFormat.IP, &sr.IP)
-	f.uint32Cond(ev.attr.SampleFormat.Tid, &sr.Pid, &sr.Tid)
-	f.uint64Cond(ev.attr.SampleFormat.Time, &sr.Time)
-	f.uint64Cond(ev.attr.SampleFormat.Addr, &sr.Addr)
-	f.uint64Cond(ev.attr.SampleFormat.ID, &sr.ID)
-	f.uint64Cond(ev.attr.SampleFormat.StreamID, &sr.StreamID)
-	f.uint32Cond(ev.attr.SampleFormat.CPU, &sr.CPU, &sr.Res)
-	f.uint64Cond(ev.attr.SampleFormat.Period, &sr.Period)
-	if ev.attr.SampleFormat.Count {
+	f.uint64Cond(ev.a.SampleFormat.Identifier, &sr.Identifier)
+	f.uint64Cond(ev.a.SampleFormat.IP, &sr.IP)
+	f.uint32Cond(ev.a.SampleFormat.Tid, &sr.Pid, &sr.Tid)
+	f.uint64Cond(ev.a.SampleFormat.Time, &sr.Time)
+	f.uint64Cond(ev.a.SampleFormat.Addr, &sr.Addr)
+	f.uint64Cond(ev.a.SampleFormat.ID, &sr.ID)
+	f.uint64Cond(ev.a.SampleFormat.StreamID, &sr.StreamID)
+	f.uint32Cond(ev.a.SampleFormat.CPU, &sr.CPU, &sr.Res)
+	f.uint64Cond(ev.a.SampleFormat.Period, &sr.Period)
+	if ev.a.SampleFormat.Count {
 		f.groupCount(&sr.Count, ev)
 	}
-	if ev.attr.SampleFormat.Callchain {
+	if ev.a.SampleFormat.Callchain {
 		var nr uint64
 		f.uint64(&nr)
 		sr.Callchain = make([]uint64, nr)
@@ -866,10 +866,10 @@ func (sr *SampleGroupRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 			f.uint64(&sr.Callchain[i])
 		}
 	}
-	if ev.attr.SampleFormat.Raw {
+	if ev.a.SampleFormat.Raw {
 		f.uint32sizeBytes(&sr.Raw)
 	}
-	if ev.attr.SampleFormat.BranchStack {
+	if ev.a.SampleFormat.BranchStack {
 		var nr uint64
 		f.uint64(&nr)
 		sr.BranchStack = make([]BranchEntry, nr)
@@ -890,40 +890,40 @@ func (sr *SampleGroupRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 			}
 		}
 	}
-	if ev.attr.SampleFormat.UserRegisters {
+	if ev.a.SampleFormat.UserRegisters {
 		f.uint64(&sr.UserRegisterABI)
-		num := bits.OnesCount64(ev.attr.SampleRegistersUser)
+		num := bits.OnesCount64(ev.a.SampleRegistersUser)
 		sr.UserRegisters = make([]uint64, num)
 		for i := 0; i < len(sr.UserRegisters); i++ {
 			f.uint64(&sr.UserRegisters[i])
 		}
 	}
-	if ev.attr.SampleFormat.UserStack {
+	if ev.a.SampleFormat.UserStack {
 		f.uint64sizeBytes(&sr.UserStack)
 		if len(sr.UserStack) > 0 {
 			f.uint64(&sr.UserStackDynamicSize)
 		}
 	}
-	f.uint64Cond(ev.attr.SampleFormat.Weight, &sr.Weight)
-	if ev.attr.SampleFormat.DataSource {
+	f.uint64Cond(ev.a.SampleFormat.Weight, &sr.Weight)
+	if ev.a.SampleFormat.DataSource {
 		var ds uint64
 		f.uint64(&ds)
 		sr.DataSource = DataSource(ds)
 	}
-	if ev.attr.SampleFormat.Transaction {
+	if ev.a.SampleFormat.Transaction {
 		var tx uint64
 		f.uint64(&tx)
 		sr.Transaction = Transaction(tx)
 	}
-	if ev.attr.SampleFormat.IntrRegisters {
+	if ev.a.SampleFormat.IntrRegisters {
 		f.uint64(&sr.IntrRegisterABI)
-		num := bits.OnesCount64(ev.attr.SampleRegistersIntr)
+		num := bits.OnesCount64(ev.a.SampleRegistersIntr)
 		sr.IntrRegisters = make([]uint64, num)
 		for i := 0; i < len(sr.IntrRegisters); i++ {
 			f.uint64(&sr.IntrRegisters[i])
 		}
 	}
-	f.uint64Cond(ev.attr.SampleFormat.PhysicalAddress, &sr.PhysicalAddress)
+	f.uint64Cond(ev.a.SampleFormat.PhysicalAddress, &sr.PhysicalAddress)
 }
 
 // ExactIP indicates that sr.IP points to the actual instruction that
