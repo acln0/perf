@@ -282,7 +282,8 @@ func (ev *Event) Enable() error {
 	if err := ev.ok(); err != nil {
 		return err
 	}
-	return ioctlEnable(ev.perffd)
+	err := ev.ioctlNoArg(unix.PERF_EVENT_IOC_ENABLE)
+	return wrapIoctlError("PERF_EVENT_IOC_ENABLE", err)
 }
 
 // Disable disables the event.
@@ -290,7 +291,8 @@ func (ev *Event) Disable() error {
 	if err := ev.ok(); err != nil {
 		return err
 	}
-	return ioctlDisable(ev.perffd)
+	err := ev.ioctlNoArg(unix.PERF_EVENT_IOC_DISABLE)
+	return wrapIoctlError("PERF_EVENT_IOC_DISABLE", err)
 }
 
 // Refresh adds delta to a counter associated with the event. This counter
@@ -302,7 +304,8 @@ func (ev *Event) Refresh(delta int) error {
 	if err := ev.ok(); err != nil {
 		return err
 	}
-	return ioctlRefresh(ev.perffd, delta)
+	err := ev.ioctlInt(unix.PERF_EVENT_IOC_REFRESH, uintptr(delta))
+	return wrapIoctlError("PERF_EVENT_IOC_REFRESH", err)
 }
 
 // Reset resets the counters associated with the event.
@@ -310,7 +313,8 @@ func (ev *Event) Reset() error {
 	if err := ev.ok(); err != nil {
 		return err
 	}
-	return ioctlReset(ev.perffd)
+	err := ev.ioctlNoArg(unix.PERF_EVENT_IOC_RESET)
+	return wrapIoctlError("PERF_EVENT_IOC_RESET", err)
 }
 
 // UpdatePeriod updates the overflow period for the event. On older kernels,
@@ -319,7 +323,8 @@ func (ev *Event) UpdatePeriod(p uint64) error {
 	if err := ev.ok(); err != nil {
 		return err
 	}
-	return ioctlPeriod(ev.perffd, &p)
+	err := ev.ioctlPointer(unix.PERF_EVENT_IOC_PERIOD, unsafe.Pointer(&p))
+	return wrapIoctlError("PERF_EVENT_IOC_PERIOD", err)
 }
 
 // SetOutput tells the kernel to send records to the specified
@@ -341,13 +346,17 @@ func (ev *Event) SetOutput(target *Event) error {
 	if err := ev.ok(); err != nil {
 		return err
 	}
+	var targetfd int
 	if target == nil {
-		return ioctlSetOutput(ev.perffd, -1)
+		targetfd = -1
+	} else {
+		if err := target.ok(); err != nil {
+			return err
+		}
+		targetfd = target.perffd
 	}
-	if err := target.ok(); err != nil {
-		return err
-	}
-	return ioctlSetOutput(ev.perffd, target.perffd)
+	err := ev.ioctlInt(unix.PERF_EVENT_IOC_SET_OUTPUT, uintptr(targetfd))
+	return wrapIoctlError("PERF_EVENT_IOC_SET_OUTPUT", err)
 }
 
 // BUG(acln): (*Event).SetFtraceFilter is not implemented
@@ -358,8 +367,8 @@ func (ev *Event) ID() (uint64, error) {
 		return 0, err
 	}
 	var val uint64
-	err := ioctlID(ev.perffd, &val)
-	return val, err
+	err := ev.ioctlPointer(unix.PERF_EVENT_IOC_ID, unsafe.Pointer(&val))
+	return val, wrapIoctlError("PERF_EVENT_IOC_ID", err)
 }
 
 // SetBPF attaches a BPF program to ev, which must be a kprobe tracepoint
@@ -368,7 +377,8 @@ func (ev *Event) SetBPF(progfd uint32) error {
 	if err := ev.ok(); err != nil {
 		return err
 	}
-	return ioctlSetBPF(ev.perffd, progfd)
+	err := ev.ioctlInt(unix.PERF_EVENT_IOC_SET_BPF, uintptr(progfd))
+	return wrapIoctlError("PERF_EVENT_IOC_SET_BPF", err)
 }
 
 // PauseOutput pauses the output from ev.
@@ -376,7 +386,8 @@ func (ev *Event) PauseOutput() error {
 	if err := ev.ok(); err != nil {
 		return err
 	}
-	return ioctlPauseOutput(ev.perffd, 1)
+	err := ev.ioctlInt(unix.PERF_EVENT_IOC_PAUSE_OUTPUT, 1)
+	return wrapIoctlError("PEF_EVENT_IOC_PAUSE_OUTPUT", err)
 }
 
 // ResumeOutput resumes output from ev.
@@ -384,7 +395,8 @@ func (ev *Event) ResumeOutput() error {
 	if err := ev.ok(); err != nil {
 		return err
 	}
-	return ioctlPauseOutput(ev.perffd, 0)
+	err := ev.ioctlInt(unix.PERF_EVENT_IOC_PAUSE_OUTPUT, 0)
+	return wrapIoctlError("PEF_EVENT_IOC_PAUSE_OUTPUT", err)
 }
 
 // QueryBPF queries the event for BPF program file descriptors attached to
@@ -394,16 +406,64 @@ func (ev *Event) QueryBPF(max uint32) ([]uint32, error) {
 	if err := ev.ok(); err != nil {
 		return nil, err
 	}
-	return ioctlQueryBPF(ev.perffd, max)
+	buf := make([]uint32, 2+max)
+	buf[0] = max
+	err := ev.ioctlPointer(unix.PERF_EVENT_IOC_QUERY_BPF, unsafe.Pointer(&buf[0]))
+	if err != nil {
+		return nil, wrapIoctlError("PERF_EVENT_IOC_QUERY_BPF", err)
+	}
+	count := buf[1]
+	fds := make([]uint32, count)
+	copy(fds, buf[2:2+count])
+	return fds, nil
 }
 
 // ModifyAttributes modifies the attributes of an event.
-func (ev *Event) ModifyAttributes(attr Attr) error {
+func (ev *Event) ModifyAttributes(attr *Attr) error {
 	if err := ev.ok(); err != nil {
 		return err
 	}
-	return ioctlModifyAttributes(ev.perffd, attr.sysAttr())
+	err := ev.ioctlPointer(unix.PERF_EVENT_IOC_MODIFY_ATTRIBUTES, unsafe.Pointer(attr))
+	return wrapIoctlError("PERF_EVENT_IOC_MODIFY_ATTRIBUTES", err)
 }
+
+func (ev *Event) ioctlNoArg(number int) error {
+	return ev.ioctlInt(number, 0)
+}
+
+func (ev *Event) ioctlInt(number int, arg uintptr) error {
+	_, _, e := unix.Syscall(unix.SYS_IOCTL, uintptr(ev.perffd), uintptr(number), arg)
+	if e != 0 {
+		return e
+	}
+	return nil
+}
+
+func (ev *Event) ioctlPointer(number int, arg unsafe.Pointer) error {
+	_, _, e := unix.Syscall(unix.SYS_IOCTL, uintptr(ev.perffd), uintptr(number), uintptr(arg))
+	if e != 0 {
+		return e
+	}
+	return nil
+}
+
+func wrapIoctlError(ioctl string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return &ioctlError{ioctl: ioctl, err: err}
+}
+
+type ioctlError struct {
+	ioctl string
+	err   error
+}
+
+func (e *ioctlError) Error() string {
+	return fmt.Sprintf("%s: %v", e.ioctl, e.err)
+}
+
+func (e *ioctlError) Unwrap() error { return e.err }
 
 // Count is a measurement taken by an Event.
 //
