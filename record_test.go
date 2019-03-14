@@ -16,8 +16,7 @@ import (
 )
 
 func TestPollTimeout(t *testing.T) {
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
+	requires(t, tracepointPMU, debugfs) // TODO(acln): paranoid
 
 	ga := new(perf.Attr)
 	gtp := perf.Tracepoint("syscalls", "sys_enter_getpid")
@@ -25,8 +24,11 @@ func TestPollTimeout(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ga.Sample = 1
+	ga.SetSamplePeriod(1)
 	ga.SampleFormat.Tid = true
+
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 
 	getpid, err := perf.Open(ga, perf.CallingThread, perf.AnyCPU, nil, 0)
 	if err != nil {
@@ -69,13 +71,15 @@ func TestPollTimeout(t *testing.T) {
 }
 
 func TestSampleGetpid(t *testing.T) {
+	requires(t, tracepointPMU, debugfs) // TODO(acln): paranoid
+
 	ga := new(perf.Attr)
 	gtp := perf.Tracepoint("syscalls", "sys_enter_getpid")
 	if err := gtp.Configure(ga); err != nil {
 		t.Fatal(err)
 	}
 
-	ga.Sample = 1
+	ga.SetSamplePeriod(1)
 	ga.SampleFormat.Tid = true
 
 	runtime.LockOSThread()
@@ -116,6 +120,8 @@ func TestSampleGetpid(t *testing.T) {
 }
 
 func TestConcurrentSampling(t *testing.T) {
+	requires(t, tracepointPMU, debugfs) // TODO(acln): paranoid
+
 	ga := new(perf.Attr)
 	gtp := perf.Tracepoint("syscalls", "sys_enter_getpid")
 	if err := gtp.Configure(ga); err != nil {
@@ -177,14 +183,16 @@ func TestConcurrentSampling(t *testing.T) {
 }
 
 func TestRecordRedirectManualWire(t *testing.T) {
+	requires(t, tracepointPMU, debugfs) // TODO(acln): paranoid
+
 	getpid := perf.Tracepoint("syscalls", "sys_enter_getpid")
 	attr := new(perf.Attr)
 	if err := getpid.Configure(attr); err != nil {
 		t.Fatalf("Configure: %v", err)
 	}
-	attr.Sample = 1
+	attr.SetSamplePeriod(1)
 	attr.Options.Disabled = true
-	attr.Wakeup = 1
+	attr.SetWakeupEvents(1)
 	attr.SampleFormat = perf.SampleFormat{
 		Tid:  true,
 		Time: true,
@@ -268,6 +276,8 @@ func TestRecordRedirectManualWire(t *testing.T) {
 }
 
 func TestGroupRecordRedirect(t *testing.T) {
+	requires(t, tracepointPMU, debugfs) // TODO(acln): paranoid
+
 	getpidattr := &perf.Attr{
 		Sample: 1,
 		Wakeup: 1,
@@ -349,6 +359,8 @@ func TestGroupRecordRedirect(t *testing.T) {
 }
 
 func TestRecordStack(t *testing.T) {
+	requires(t, tracepointPMU, debugfs) // TODO(acln): paranoid
+
 	getpidattr := &perf.Attr{
 		Sample: 1,
 		Wakeup: 1,

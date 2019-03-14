@@ -12,8 +12,7 @@ import (
 )
 
 func TestGroup(t *testing.T) {
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
+	requires(t, paranoid(1), hardwarePMU, softwarePMU)
 
 	g := perf.Group{
 		CountFormat: perf.CountFormat{
@@ -28,6 +27,9 @@ func TestGroup(t *testing.T) {
 	dummy.Sample = 1
 
 	g.Add(dummy)
+
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 
 	ev, err := g.Open(perf.CallingThread, perf.AnyCPU)
 	if err != nil {

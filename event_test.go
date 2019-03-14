@@ -15,61 +15,74 @@ import (
 )
 
 func TestOpen(t *testing.T) {
-	t.Run("BadGroup", func(t *testing.T) {
-		ca := new(perf.Attr)
-		perf.CPUCycles.Configure(ca)
-		ca.CountFormat.Group = true
+	t.Run("BadGroup", testOpenBadGroup)
+	t.Run("BadAttrType", testOpenBadAttrType)
+	t.Run("PopulatesLabel", testOpenPopulatesLabel)
+}
 
-		cycles, err := perf.Open(ca, perf.CallingThread, perf.AnyCPU, nil, 0)
-		if err != nil {
-			t.Fatal(err)
-		}
-		cycles.Close()
+func testOpenBadGroup(t *testing.T) {
+	requires(t, paranoid(1), hardwarePMU)
 
-		_, err = perf.Open(ca, perf.CallingThread, perf.AnyCPU, cycles, 0)
-		if err == nil {
-			t.Fatal("successful Open with closed group *Event")
-		}
+	ca := new(perf.Attr)
+	perf.CPUCycles.Configure(ca)
+	ca.CountFormat.Group = true
 
-		cycles = new(perf.Event) // uninitialized
-		_, err = perf.Open(ca, perf.CallingThread, perf.AnyCPU, cycles, 0)
-		if err == nil {
-			t.Fatal("successful Open with closed group *Event")
-		}
-	})
-	t.Run("BadAttrType", func(t *testing.T) {
-		a := &perf.Attr{
-			Type: 42,
-		}
+	cycles, err := perf.Open(ca, perf.CallingThread, perf.AnyCPU, nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cycles.Close()
 
-		_, err := perf.Open(a, perf.CallingThread, perf.AnyCPU, nil, 0)
-		if err == nil {
-			t.Fatal("got a valid *Event for bad Attr.Type 42")
-		}
-	})
-	t.Run("PopulatesLabel", func(t *testing.T) {
-		ca := &perf.Attr{
-			Type:   perf.HardwareEvent,
-			Config: uint64(perf.CPUCycles),
-		}
+	_, err = perf.Open(ca, perf.CallingThread, perf.AnyCPU, cycles, 0)
+	if err == nil {
+		t.Fatal("successful Open with closed group *Event")
+	}
 
-		cycles, err := perf.Open(ca, perf.CallingThread, perf.AnyCPU, nil, 0)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer cycles.Close()
+	cycles = new(perf.Event) // uninitialized
+	_, err = perf.Open(ca, perf.CallingThread, perf.AnyCPU, cycles, 0)
+	if err == nil {
+		t.Fatal("successful Open with closed group *Event")
+	}
+}
 
-		c, err := cycles.Measure(getpidTrigger)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if c.Label == "" {
-			t.Fatal("Open did not set label on *Attr")
-		}
-	})
+func testOpenBadAttrType(t *testing.T) {
+	a := &perf.Attr{
+		Type: 42,
+	}
+
+	_, err := perf.Open(a, perf.CallingThread, perf.AnyCPU, nil, 0)
+	if err == nil {
+		t.Fatal("got a valid *Event for bad Attr.Type 42")
+	}
+}
+
+func testOpenPopulatesLabel(t *testing.T) {
+	// TODO(acln): extend when we implement general label lookup
+	requires(t, paranoid(1), hardwarePMU)
+
+	ca := &perf.Attr{
+		Type:   perf.HardwareEvent,
+		Config: uint64(perf.CPUCycles),
+	}
+
+	cycles, err := perf.Open(ca, perf.CallingThread, perf.AnyCPU, nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cycles.Close()
+
+	c, err := cycles.Measure(getpidTrigger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Label == "" {
+		t.Fatal("Open did not set label on *Attr")
+	}
 }
 
 func TestHardwareCounters(t *testing.T) {
+	requires(t, paranoid(1), hardwarePMU)
+
 	var g perf.Group
 	g.Add(perf.CPUCycles, perf.Instructions)
 
@@ -101,6 +114,8 @@ func TestHardwareCounters(t *testing.T) {
 var fault []byte
 
 func TestCountPageFaults(t *testing.T) {
+	requires(t, paranoid(1), softwarePMU)
+
 	pfa := new(perf.Attr)
 	perf.PageFaults.Configure(pfa)
 
@@ -129,6 +144,8 @@ func TestCountPageFaults(t *testing.T) {
 }
 
 func TestCountFormatID(t *testing.T) {
+	requires(t, paranoid(1), softwarePMU)
+
 	pfa := new(perf.Attr)
 	perf.PageFaults.Configure(pfa)
 	pfa.CountFormat.ID = true
@@ -201,6 +218,8 @@ func (tt singleTracepointTest) String() string {
 }
 
 func TestSingleTracepoint(t *testing.T) {
+	requires(t, paranoid(1), tracepointPMU, debugfs)
+
 	tests := []singleTracepointTest{
 		{
 			category: "syscalls",
