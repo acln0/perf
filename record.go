@@ -756,7 +756,7 @@ func (sr *SampleRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 				InTransaction:    tmp&(1<<2) != 0,
 				TransactionAbort: tmp&(1<<3) != 0,
 				Cycles:           uint16((tmp << 44) >> 48),
-				BranchType:       uint8((tmp << 40) >> 44),
+				BranchType:       BranchType((tmp << 40) >> 44),
 			}
 		}
 	}
@@ -886,7 +886,7 @@ func (sr *SampleGroupRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 				InTransaction:    tmp&(1<<2) != 0,
 				TransactionAbort: tmp&(1<<3) != 0,
 				Cycles:           uint16((tmp << 44) >> 48),
-				BranchType:       uint8((tmp << 40) >> 44),
+				BranchType:       BranchType((tmp << 40) >> 44),
 			}
 		}
 	}
@@ -942,8 +942,25 @@ type BranchEntry struct {
 	InTransaction    bool
 	TransactionAbort bool
 	Cycles           uint16
-	BranchType       uint8
+	BranchType       BranchType
 }
+
+type BranchType uint8
+
+// TODO(acln): add to x/sys/unix?
+const (
+	BranchTypeUnknown BranchType = iota
+	BranchTypeConditional
+	BranchTypeUnconditional
+	BranchTypeIndirect
+	BranchTypeCall
+	BranchTypeIndirectCall
+	BranchTypeReturn
+	BranchTypeSyscall
+	BranchTypeSyscallReturn
+	BranchTypeConditionalCall
+	BranchTypeConditionalReturn
+)
 
 // Mmap2Record (PERF_RECORD_MMAP2) includes extended information on mmap(2)
 // calls returning executable mappings. It is similar to MmapRecord, but

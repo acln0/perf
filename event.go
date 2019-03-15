@@ -71,7 +71,7 @@ type Event struct {
 	// meta is the metadata page: &ring[0].
 	meta *unix.PerfEventMmapPage
 
-	// wakeupfd is an event file descriptor (see eventfd(2)): it is used to
+	// wakeupfd is an event file descriptor (see eventfd(2)). It is used to
 	// unblock calls to ReadRawRecord when the associated context expires.
 	wakeupfd int
 
@@ -1071,8 +1071,8 @@ const (
 	BreakpointTypeEmpty BreakpointType = 0x0
 	BreakpointTypeR     BreakpointType = 0x1
 	BreakpointTypeW     BreakpointType = 0x2
-	BreakpointTypeRW                   = BreakpointTypeR | BreakpointTypeW
-	BreakpointTypeX                    = 0x4
+	BreakpointTypeRW    BreakpointType = BreakpointTypeR | BreakpointTypeW
+	BreakpointTypeX     BreakpointType = 0x4
 )
 
 // BreakpointLength is the length of the breakpoint being measured.
