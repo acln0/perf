@@ -5,9 +5,11 @@
 package perf_test
 
 import (
+	"math/rand"
 	"os"
 	"runtime"
 	"testing"
+	"time"
 
 	"acln.ro/perf"
 
@@ -154,6 +156,103 @@ func testPageFaults(t *testing.T) {
 		t.Fatal("didn't see a page fault")
 	}
 	t.Logf("saw %d page faults", c.Value)
+}
+
+func TestHardwareCacheCounters(t *testing.T) {
+	requires(t, paranoid(1)) // TODO(acln): PMU?
+
+	t.Run("L1DataMissesBadLocality", testL1DataMissesBadLocality)
+	t.Run("L1DataMissesGoodLocality", testL1DataMissesGoodLocality)
+}
+
+func testL1DataMissesBadLocality(t *testing.T) {
+	hwca := new(perf.Attr)
+	hwcc := perf.HardwareCacheCounter{
+		Cache:  perf.L1D,
+		Op:     perf.Read,
+		Result: perf.Miss,
+	}
+	hwcc.Configure(hwca)
+
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	l1dmisses, err := perf.Open(hwca, perf.CallingThread, perf.AnyCPU, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l1dmisses.Close()
+
+	rng := rand.New(rand.NewSource(time.Now().Unix()))
+
+	max := 1000
+
+	var bad []interface{}
+	for i := 0; i < 10000; i++ {
+		bad = append(bad, rng.Intn(max))
+	}
+
+	sink := 0
+	c, err := l1dmisses.Measure(func() {
+		for _, v := range bad {
+			if v.(int) < max/2 {
+				sink++
+			}
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Value == 0 {
+		t.Fatalf("recorded no L1 data cache misses")
+	}
+
+	t.Logf("bad locality: got %d L1 data cache misses", c.Value)
+}
+
+func testL1DataMissesGoodLocality(t *testing.T) {
+	hwca := new(perf.Attr)
+	hwcc := perf.HardwareCacheCounter{
+		Cache:  perf.L1D,
+		Op:     perf.Read,
+		Result: perf.Miss,
+	}
+	hwcc.Configure(hwca)
+
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	l1dmisses, err := perf.Open(hwca, perf.CallingThread, perf.AnyCPU, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l1dmisses.Close()
+
+	rng := rand.New(rand.NewSource(time.Now().Unix()))
+
+	max := 1000
+
+	var contiguous []int
+	for i := 0; i < 10000; i++ {
+		contiguous = append(contiguous, rng.Intn(max))
+	}
+
+	sink := 0
+	c, err := l1dmisses.Measure(func() {
+		for _, v := range contiguous {
+			if v < max/2 {
+				sink++
+			}
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Value == 0 {
+		t.Fatalf("recorded no L1 data cache misses")
+	}
+
+	t.Logf("good locality: got %d L1 data cache misses", c.Value)
 }
 
 func TestCountFormatID(t *testing.T) {
