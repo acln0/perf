@@ -14,19 +14,16 @@ import (
 func TestGroup(t *testing.T) {
 	requires(t, paranoid(1), hardwarePMU, softwarePMU)
 
+	da := new(perf.Attr)
+	perf.Dummy.Configure(da)
+
 	g := perf.Group{
 		CountFormat: perf.CountFormat{
 			Enabled: true,
 			Running: true,
 		},
 	}
-	g.Add(perf.CPUCycles, perf.Instructions)
-
-	dummy := new(perf.Attr)
-	perf.Dummy.Configure(dummy)
-	dummy.Sample = 1
-
-	g.Add(dummy)
+	g.Add(perf.CPUCycles, perf.Instructions, da)
 
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
@@ -45,6 +42,6 @@ func TestGroup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MeasureGroup: %v", err)
 	}
-	_ = sum
-	_ = gc // TODO(acln): find a way to write a test for these
+
+	t.Logf("got sum %d in %d %s and %d %s", sum, gc.Values[0].Value, gc.Values[0].Label, gc.Values[1].Value, gc.Values[1].Label)
 }

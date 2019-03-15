@@ -24,14 +24,12 @@ func testPollTimeout(t *testing.T) {
 	requires(t, tracepointPMU, debugfs) // TODO(acln): paranoid
 
 	ga := new(perf.Attr)
+	ga.SetSamplePeriod(1)
+	ga.SetWakeupEvents(1)
 	gtp := perf.Tracepoint("syscalls", "sys_enter_getpid")
 	if err := gtp.Configure(ga); err != nil {
 		t.Fatal(err)
 	}
-
-	ga.SetSamplePeriod(1)
-	ga.SampleFormat.Tid = true
-	ga.SetWakeupEvents(1)
 
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
@@ -66,7 +64,7 @@ func testPollTimeout(t *testing.T) {
 		t.Fatalf("got %d hits for %q, want 1", c.Value, c.Label)
 	}
 
-	// For the first event, we should get a valid sample.
+	// For the first event, we should get a valid sample immediately.
 	select {
 	case <-time.After(10 * time.Millisecond):
 		t.Fatalf("didn't get the first sample: timeout")
@@ -91,14 +89,12 @@ func testPollCancel(t *testing.T) {
 	requires(t, tracepointPMU, debugfs) // TODO(acln): paranoid
 
 	ga := new(perf.Attr)
+	ga.SetSamplePeriod(1)
+	ga.SetWakeupEvents(1)
 	gtp := perf.Tracepoint("syscalls", "sys_enter_getpid")
 	if err := gtp.Configure(ga); err != nil {
 		t.Fatal(err)
 	}
-
-	ga.SetSamplePeriod(1)
-	ga.SampleFormat.Tid = true
-	ga.SetWakeupEvents(1)
 
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
@@ -134,7 +130,7 @@ func testPollCancel(t *testing.T) {
 
 	// For the first event, we should get a valid sample.
 	select {
-	case <-time.After(5000 * time.Millisecond):
+	case <-time.After(10 * time.Millisecond):
 		t.Fatalf("didn't get the first sample: timeout")
 	case err := <-errch:
 		if err != nil {
@@ -160,14 +156,17 @@ func testPollCancel(t *testing.T) {
 func TestSampleGetpid(t *testing.T) {
 	requires(t, tracepointPMU, debugfs) // TODO(acln): paranoid
 
-	ga := new(perf.Attr)
+	ga := &perf.Attr{
+		SampleFormat: perf.SampleFormat{
+			Tid: true,
+		},
+	}
+	ga.SetSamplePeriod(1)
+	ga.SetWakeupEvents(1)
 	gtp := perf.Tracepoint("syscalls", "sys_enter_getpid")
 	if err := gtp.Configure(ga); err != nil {
 		t.Fatal(err)
 	}
-
-	ga.SetSamplePeriod(1)
-	ga.SampleFormat.Tid = true
 
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
@@ -185,7 +184,6 @@ func TestSampleGetpid(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	if c.Value != 1 {
 		t.Fatalf("got %d hits for %q, want 1 hit", c.Value, c.Label)
 	}
@@ -209,15 +207,17 @@ func TestSampleGetpid(t *testing.T) {
 func TestConcurrentSampling(t *testing.T) {
 	requires(t, tracepointPMU, debugfs) // TODO(acln): paranoid
 
-	ga := new(perf.Attr)
+	ga := &perf.Attr{
+		SampleFormat: perf.SampleFormat{
+			Tid: true,
+		},
+	}
+	ga.SetSamplePeriod(1)
+	ga.SetWakeupEvents(1)
 	gtp := perf.Tracepoint("syscalls", "sys_enter_getpid")
 	if err := gtp.Configure(ga); err != nil {
 		t.Fatal(err)
 	}
-
-	ga.Sample = 1
-	ga.SampleFormat.Tid = true
-	ga.Wakeup = 1
 
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
@@ -272,57 +272,61 @@ func TestConcurrentSampling(t *testing.T) {
 func TestRecordRedirectManualWire(t *testing.T) {
 	requires(t, tracepointPMU, debugfs) // TODO(acln): paranoid
 
-	getpid := perf.Tracepoint("syscalls", "sys_enter_getpid")
-	attr := new(perf.Attr)
-	if err := getpid.Configure(attr); err != nil {
+	ga := &perf.Attr{
+		SampleFormat: perf.SampleFormat{
+			Tid:  true,
+			Time: true,
+			CPU:  true,
+			Addr: true,
+		},
+		CountFormat: perf.CountFormat{
+			Group: true,
+		},
+		Options: perf.Options{
+			Disabled: true,
+		},
+	}
+	ga.SetSamplePeriod(1)
+	ga.SetWakeupEvents(1)
+	gtp := perf.Tracepoint("syscalls", "sys_enter_getpid")
+	if err := gtp.Configure(ga); err != nil {
 		t.Fatalf("Configure: %v", err)
-	}
-	attr.SetSamplePeriod(1)
-	attr.Options.Disabled = true
-	attr.SetWakeupEvents(1)
-	attr.SampleFormat = perf.SampleFormat{
-		Tid:  true,
-		Time: true,
-		CPU:  true,
-		Addr: true,
-	}
-	attr.CountFormat = perf.CountFormat{
-		Group: true,
 	}
 
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	leader, err := perf.Open(attr, perf.CallingThread, perf.AnyCPU, nil)
+	leader, err := perf.Open(ga, perf.CallingThread, perf.AnyCPU, nil)
 	if err != nil {
-		t.Fatalf("Open: %v", err)
+		t.Fatal(err)
 	}
 	defer leader.Close()
 	if err := leader.MapRing(); err != nil {
-		t.Fatalf("MapRing: %v", err)
+		t.Fatal(err)
 	}
 
-	write := perf.Tracepoint("syscalls", "sys_enter_write")
-	attr = new(perf.Attr)
-	if err := write.Configure(attr); err != nil {
-		t.Fatalf("Configure: %v", err)
+	wa := &perf.Attr{
+		SampleFormat: perf.SampleFormat{
+			Tid:  true,
+			Time: true,
+			CPU:  true,
+			Addr: true,
+		},
 	}
-	attr.Sample = 1
-	attr.Wakeup = 1
-	attr.SampleFormat = perf.SampleFormat{
-		Tid:  true,
-		Time: true,
-		CPU:  true,
-		Addr: true,
+	wa.SetSamplePeriod(1)
+	wa.SetWakeupEvents(1)
+	wtp := perf.Tracepoint("syscalls", "sys_enter_write")
+	if err := wtp.Configure(wa); err != nil {
+		t.Fatal(err)
 	}
 
-	follower, err := perf.Open(attr, perf.CallingThread, perf.AnyCPU, leader)
+	follower, err := perf.Open(wa, perf.CallingThread, perf.AnyCPU, leader)
 	if err != nil {
-		t.Fatalf("Open: %v", err)
+		t.Fatal(err)
 	}
 	defer follower.Close()
 	if err := follower.SetOutput(leader); err != nil {
-		t.Fatalf("SetOutput: %v", err)
+		t.Fatal(err)
 	}
 
 	type result struct {
@@ -330,13 +334,13 @@ func TestRecordRedirectManualWire(t *testing.T) {
 		err error
 	}
 
-	ch := make(chan result)
+	errch := make(chan error)
 	go func() {
 		for i := 0; i < 2; i++ {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 			defer cancel()
-			rec, err := leader.ReadRecord(ctx)
-			ch <- result{rec, err}
+			_, err := leader.ReadRecord(ctx)
+			errch <- err
 		}
 	}()
 
@@ -345,7 +349,7 @@ func TestRecordRedirectManualWire(t *testing.T) {
 		writeTrigger()
 	})
 	if err != nil {
-		t.Fatalf("Measure: %v", err)
+		t.Fatal(err)
 	}
 
 	if got := gc.Values[0]; got.Value != 1 {
@@ -354,10 +358,15 @@ func TestRecordRedirectManualWire(t *testing.T) {
 	if got := gc.Values[1]; got.Value != 1 {
 		t.Fatalf("got %d hits for %q, want 1 hit", got.Value, got.Label)
 	}
+
 	for i := 0; i < 2; i++ {
-		res := <-ch
-		if res.err != nil {
-			t.Fatalf("did not get sample record: %v", res.err)
+		select {
+		case <-time.After(10 * time.Millisecond):
+			t.Errorf("did not get sample record: timeout")
+		case err := <-errch:
+			if err != nil {
+				t.Fatalf("did not get sample record: %v", err)
+			}
 		}
 	}
 }
@@ -365,9 +374,7 @@ func TestRecordRedirectManualWire(t *testing.T) {
 func TestGroupRecordRedirect(t *testing.T) {
 	requires(t, tracepointPMU, debugfs) // TODO(acln): paranoid
 
-	getpidattr := &perf.Attr{
-		Sample: 1,
-		Wakeup: 1,
+	ga := &perf.Attr{
 		Options: perf.Options{
 			Disabled: true,
 		},
@@ -378,14 +385,14 @@ func TestGroupRecordRedirect(t *testing.T) {
 			IP:   true,
 		},
 	}
-	getpidtp := perf.Tracepoint("syscalls", "sys_enter_getpid")
-	if err := getpidtp.Configure(getpidattr); err != nil {
+	ga.SetSamplePeriod(1)
+	ga.SetWakeupEvents(1)
+	gtp := perf.Tracepoint("syscalls", "sys_enter_getpid")
+	if err := gtp.Configure(ga); err != nil {
 		t.Fatal(err)
 	}
 
-	writeattr := &perf.Attr{
-		Sample: 1,
-		Wakeup: 1,
+	wa := &perf.Attr{
 		SampleFormat: perf.SampleFormat{
 			Tid:  true,
 			Time: true,
@@ -393,8 +400,10 @@ func TestGroupRecordRedirect(t *testing.T) {
 			IP:   true,
 		},
 	}
-	writetp := perf.Tracepoint("syscalls", "sys_enter_write")
-	if err := writetp.Configure(writeattr); err != nil {
+	wa.SetSamplePeriod(1)
+	wa.SetWakeupEvents(1)
+	wtp := perf.Tracepoint("syscalls", "sys_enter_write")
+	if err := wtp.Configure(wa); err != nil {
 		t.Fatal(err)
 	}
 
@@ -404,7 +413,7 @@ func TestGroupRecordRedirect(t *testing.T) {
 			Running: true,
 		},
 	}
-	g.Add(getpidattr, writeattr)
+	g.Add(ga, wa)
 
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
@@ -430,27 +439,34 @@ func TestGroupRecordRedirect(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
-	getpidrec, err := ev.ReadRecord(ctx)
+
+	grec, err := ev.ReadRecord(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	writerec, err := ev.ReadRecord(ctx)
+	gsr, ok := grec.(*perf.SampleGroupRecord)
+	if !ok {
+		t.Fatalf("got %T, want SampleGroupRecord", grec)
+	}
+
+	wrec, err := ev.ReadRecord(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	getpidip := getpidrec.(*perf.SampleGroupRecord).IP
-	writeip := writerec.(*perf.SampleGroupRecord).IP
-	if getpidip == writeip {
-		t.Fatalf("equal instruction pointers 0x%x for samples of different events", getpidip)
+	wsr, ok := wrec.(*perf.SampleGroupRecord)
+	if !ok {
+		t.Fatalf("got %T, want SampleGroupRecord", wrec)
+	}
+
+	if gip, wip := gsr.IP, wsr.IP; gip == wip {
+		t.Fatalf("equal IP 0x%x for samples of different events", wip)
 	}
 }
 
 func TestSampleStack(t *testing.T) {
 	requires(t, tracepointPMU, debugfs) // TODO(acln): paranoid
 
-	getpidattr := &perf.Attr{
-		Sample: 1,
-		Wakeup: 1,
+	ga := &perf.Attr{
 		Options: perf.Options{
 			Disabled: true,
 		},
@@ -462,20 +478,21 @@ func TestSampleStack(t *testing.T) {
 			Callchain: true,
 		},
 	}
-	getpidtp := perf.Tracepoint("syscalls", "sys_enter_getpid")
-	if err := getpidtp.Configure(getpidattr); err != nil {
+	ga.SetSamplePeriod(1)
+	ga.SetWakeupEvents(1)
+	gtp := perf.Tracepoint("syscalls", "sys_enter_getpid")
+	if err := gtp.Configure(ga); err != nil {
 		t.Fatal(err)
 	}
 
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	getpid, err := perf.Open(getpidattr, perf.CallingThread, perf.AnyCPU, nil)
+	getpid, err := perf.Open(ga, perf.CallingThread, perf.AnyCPU, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer getpid.Close()
-
 	if err := getpid.MapRing(); err != nil {
 		t.Fatal(err)
 	}

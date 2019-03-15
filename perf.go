@@ -16,7 +16,7 @@ A Group represents a set of perf events measured together.
 
 Attr is a low level configuration structure:
 
-	fattr := &perf.Attr{
+	fa := &perf.Attr{
 		Type:   perf.SoftwareEvent,
 		Config: uint64(perf.PageFaults),
 		CountFormat: perf.CountFormat{
@@ -25,7 +25,7 @@ Attr is a low level configuration structure:
 		},
 	}
 
-	faults, err := perf.Open(fattr, perf.CallingThread, perf.AnyCPU, nil)
+	faults, err := perf.Open(fa, perf.CallingThread, perf.AnyCPU, nil)
 	// ...
 	c, err := faults.Measure(func() { ... })
 
@@ -45,7 +45,7 @@ Event is called:
 
 Tracepoints are also supported:
 
-	wattr := &perf.Attr{
+	wa := &perf.Attr{
 		Sample: 1,
 		RecordFormat: perf.SampleFormat{
 			Pid: true,
@@ -53,10 +53,10 @@ Tracepoints are also supported:
 			IP:  true,
 		},
 	}
-	writetp := perf.Tracepoint("syscalls", "sys_enter_write")
-	writetp.Configure(wattr)
+	wtp := perf.Tracepoint("syscalls", "sys_enter_write")
+	wtp.Configure(wattr)
 
-	writes, err := perf.Open(wattr, targetpid, perf.AnyCPU, nil)
+	writes, err := perf.Open(wa, targetpid, perf.AnyCPU, nil)
 	// ...
 	c, err := writes.Measure(func() { ... })
 
