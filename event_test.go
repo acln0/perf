@@ -159,7 +159,12 @@ func testPageFaults(t *testing.T) {
 }
 
 func TestHardwareCacheCounters(t *testing.T) {
-	requires(t, paranoid(1)) // TODO(acln): PMU?
+	// TODO(acln): add PMU requirement? but how?
+	//
+	// $ ls /sys/bus/event_source/devices/*/type | xargs cat
+	//
+	// does not contain a 3, which is the value of perf.HardwareCacheEvent
+	requires(t, paranoid(1))
 
 	t.Run("L1DataMissesBadLocality", testL1DataMissesBadLocality)
 	t.Run("L1DataMissesGoodLocality", testL1DataMissesGoodLocality)

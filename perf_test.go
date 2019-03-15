@@ -66,9 +66,9 @@ type capHeader struct {
 }
 
 type capData struct {
-	effective   uint32
-	permitted   uint32
-	inheritable uint32
+	effective uint32
+	_         uint32 // permitted
+	_         uint32 // inheritable
 }
 
 // constants from uapi/linux/capability.h
