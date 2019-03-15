@@ -48,19 +48,28 @@ Overflow records are available once the MapRing method on Event is called:
 Tracepoints are also supported:
 
 	wa := &perf.Attr{
-		Sample: 1,
 		RecordFormat: perf.SampleFormat{
 			Pid: true,
 			Tid: true,
 			IP:  true,
 		},
 	}
+	wa.SetSamplePeriod(1)
+	wa.SetWakeupEvents(1)
 	wtp := perf.Tracepoint("syscalls", "sys_enter_write")
-	wtp.Configure(wattr)
+	wtp.Configure(wa)
 
 	writes, err := perf.Open(wa, targetpid, perf.AnyCPU, nil)
 	// ...
 	c, err := writes.Measure(func() { ... })
+	// ...
+	fmt.Printf("saw %d writes\n", c.Value)
+
+	rec, err := writes.ReadRecord(ctx)
+	// ...
+	sr, ok := rec.(*perf.SampleRecord)
+	// ...
+	fmt.Printf("pid = %d, tid = %d\n", sr.Pid, sr.Tid)
 
 For more detailed information, see the examples, and man 2 perf_event_open.
 */
