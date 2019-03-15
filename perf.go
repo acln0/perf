@@ -5,6 +5,8 @@
 /*
 Package perf provides access to the Linux perf API.
 
+Counting events
+
 A Group represents a set of perf events measured together.
 
 	var g perf.Group
@@ -14,23 +16,23 @@ A Group represents a set of perf events measured together.
 	// ...
 	gc, err := hw.MeasureGroup(func() { ... })
 
-Attr is a low level configuration structure:
+Attr configures an individual event.
 
 	fa := &perf.Attr{
-		Type:   perf.SoftwareEvent,
-		Config: uint64(perf.PageFaults),
 		CountFormat: perf.CountFormat{
 			Running: true,
 			ID:      true,
 		},
 	}
+	perf.PageFaults.Configure(fa)
 
 	faults, err := perf.Open(fa, perf.CallingThread, perf.AnyCPU, nil)
 	// ...
 	c, err := faults.Measure(func() { ... })
 
-Overflow records are available once the MapRing method on
-Event is called:
+Sampling events
+
+Overflow records are available once the MapRing method on Event is called:
 
 	var ev perf.Event // initialized previously
 	ev.MapRing()
