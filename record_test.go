@@ -329,11 +329,6 @@ func TestRecordRedirectManualWire(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	type result struct {
-		rec perf.Record
-		err error
-	}
-
 	errch := make(chan error)
 	go func() {
 		for i := 0; i < 2; i++ {
