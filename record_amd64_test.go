@@ -21,39 +21,47 @@ func TestSampleUserRegisters(t *testing.T) {
 	// TODO(acln): rewrite this to use groups rather than manual wiring,
 	// when reading sampling records from groups is supported correctly.
 
-	wentrya := new(perf.Attr)
-	wentrytp := perf.Tracepoint("syscalls", "sys_enter_write")
-	if err := wentrytp.Configure(wentrya); err != nil {
+	wea := &perf.Attr{
+		CountFormat: perf.CountFormat{
+			Group: true,
+		},
+		SampleFormat: perf.SampleFormat{
+			UserRegisters: true,
+		},
+		Options: perf.Options{
+			RecordIDAll: true,
+		},
+		// RDI, RSI, RDX. See arch/x86/include/uapi/asm/perf_regs.h.
+		SampleRegistersUser: 0x38,
+	}
+	wea.SetSamplePeriod(1)
+	wea.SetWakeupEvents(1)
+	wetp := perf.Tracepoint("syscalls", "sys_enter_write")
+	if err := wetp.Configure(wea); err != nil {
 		t.Fatal(err)
 	}
 
-	wentrya.SetSamplePeriod(1)
-	wentrya.CountFormat.Group = true
-	wentrya.SampleFormat.IP = true
-	wentrya.SampleFormat.UserRegisters = true
-	wentrya.Options.RecordIDAll = true
-
-	// RDI, RSI, RDX. See arch/x86/include/uapi/asm/perf_regs.h.
-	wentrya.SampleRegistersUser = 0x38
-
-	wexita := new(perf.Attr)
-	wexittp := perf.Tracepoint("syscalls", "sys_exit_write")
-	if err := wexittp.Configure(wexita); err != nil {
+	wxa := &perf.Attr{
+		SampleFormat: perf.SampleFormat{
+			UserRegisters: true,
+		},
+		Options: perf.Options{
+			RecordIDAll: true,
+		},
+		// RAX. See arch/x86/include/uapi/asm/perf_regs.h.
+		SampleRegistersUser: 0x1,
+	}
+	wxa.SetSamplePeriod(1)
+	wxa.SetWakeupEvents(1)
+	wxtp := perf.Tracepoint("syscalls", "sys_exit_write")
+	if err := wxtp.Configure(wxa); err != nil {
 		t.Fatal(err)
 	}
-
-	wexita.SetSamplePeriod(1)
-	wexita.SampleFormat.IP = true
-	wexita.SampleFormat.UserRegisters = true
-	wexita.Options.RecordIDAll = true
-
-	// RAX
-	wexita.SampleRegistersUser = 0x1
 
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	wentry, err := perf.Open(wentrya, perf.CallingThread, perf.AnyCPU, nil)
+	wentry, err := perf.Open(wea, perf.CallingThread, perf.AnyCPU, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +70,7 @@ func TestSampleUserRegisters(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	wexit, err := perf.Open(wexita, perf.CallingThread, perf.AnyCPU, wentry)
+	wexit, err := perf.Open(wxa, perf.CallingThread, perf.AnyCPU, wentry)
 	if err != nil {
 		t.Fatal(err)
 	}
