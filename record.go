@@ -892,6 +892,8 @@ func (sr *SampleGroupRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	}
 	if ev.a.SampleFormat.UserRegisters {
 		f.uint64(&sr.UserRegisterABI)
+		// BUG(acln): Reading records from groups is hopelessly broken
+		// in some cases. Fix before shipping.
 		num := bits.OnesCount64(ev.a.SampleRegistersUser)
 		sr.UserRegisters = make([]uint64, num)
 		for i := 0; i < len(sr.UserRegisters); i++ {
