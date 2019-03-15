@@ -358,7 +358,7 @@ func TestGroupRecordRedirect(t *testing.T) {
 	}
 }
 
-func TestRecordStack(t *testing.T) {
+func TestSampleStack(t *testing.T) {
 	requires(t, tracepointPMU, debugfs) // TODO(acln): paranoid
 
 	getpidattr := &perf.Attr{
