@@ -15,7 +15,12 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func TestPollTimeout(t *testing.T) {
+func TestPoll(t *testing.T) {
+	t.Run("Timeout", testPollTimeout)
+	t.Run("Cancel", testPollCancel)
+}
+
+func testPollTimeout(t *testing.T) {
 	requires(t, tracepointPMU, debugfs) // TODO(acln): paranoid
 
 	ga := new(perf.Attr)
@@ -26,6 +31,7 @@ func TestPollTimeout(t *testing.T) {
 
 	ga.SetSamplePeriod(1)
 	ga.SampleFormat.Tid = true
+	ga.SetWakeupEvents(1)
 
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
@@ -40,9 +46,10 @@ func TestPollTimeout(t *testing.T) {
 	}
 
 	errch := make(chan error)
+	timeout := 20 * time.Millisecond
 
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 
 		for i := 0; i < 2; i++ {
@@ -60,13 +67,93 @@ func TestPollTimeout(t *testing.T) {
 	}
 
 	// For the first event, we should get a valid sample.
-	if err := <-errch; err != nil {
-		t.Fatalf("got %v, want valid first sample", err)
+	select {
+	case <-time.After(10 * time.Millisecond):
+		t.Fatalf("didn't get the first sample: timeout")
+	case err := <-errch:
+		if err != nil {
+			t.Fatalf("got %v, want valid first sample", err)
+		}
 	}
 
 	// Now, we should get a timeout.
-	if err := <-errch; err != context.DeadlineExceeded {
-		t.Fatalf("got %v, want %v", err, context.DeadlineExceeded)
+	select {
+	case <-time.After(2 * timeout):
+		t.Fatalf("didn't time out")
+	case err := <-errch:
+		if err != context.DeadlineExceeded {
+			t.Fatalf("got %v, want %v", err, context.DeadlineExceeded)
+		}
+	}
+}
+
+func testPollCancel(t *testing.T) {
+	requires(t, tracepointPMU, debugfs) // TODO(acln): paranoid
+
+	ga := new(perf.Attr)
+	gtp := perf.Tracepoint("syscalls", "sys_enter_getpid")
+	if err := gtp.Configure(ga); err != nil {
+		t.Fatal(err)
+	}
+
+	ga.SetSamplePeriod(1)
+	ga.SampleFormat.Tid = true
+	ga.SetWakeupEvents(1)
+
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	getpid, err := perf.Open(ga, perf.CallingThread, perf.AnyCPU, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer getpid.Close()
+	if err := getpid.MapRing(); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errch := make(chan error)
+
+	go func() {
+		for i := 0; i < 2; i++ {
+			_, err := getpid.ReadRecord(ctx)
+			errch <- err
+		}
+	}()
+
+	c, err := getpid.Measure(getpidTrigger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Value != 1 {
+		t.Fatalf("got %d hits for %q, want 1", c.Value, c.Label)
+	}
+
+	// For the first event, we should get a valid sample.
+	select {
+	case <-time.After(5000 * time.Millisecond):
+		t.Fatalf("didn't get the first sample: timeout")
+	case err := <-errch:
+		if err != nil {
+			t.Fatalf("got %v, want valid first sample", err)
+		}
+	}
+
+	// The goroutine reading the records is now blocked in ReadRecord.
+	// Cancel the context and observe the results. We should see
+	// context.Canceled quite quickly.
+	cancel()
+
+	select {
+	case <-time.After(10 * time.Millisecond):
+		t.Fatalf("context cancel didn't unblock ReadRecord")
+	case err := <-errch:
+		if err != context.Canceled {
+			t.Fatalf("got %v, want %v", err, context.Canceled)
+		}
 	}
 }
 
