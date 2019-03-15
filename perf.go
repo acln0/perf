@@ -35,14 +35,17 @@ Sampling events
 Overflow records are available once the MapRing method on Event is called:
 
 	var ev perf.Event // initialized previously
+
 	ev.MapRing()
+
+	ev.Enable()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
 
 	for {
 		rec, err := ev.ReadRecord(ctx)
-		// ...
+		// process rec
 	}
 
 Tracepoints are also supported:
