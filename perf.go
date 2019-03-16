@@ -100,9 +100,9 @@ func (f *fields) string(s *string) {
 	}
 }
 
-// id decodes a RecordID based on the SampleFormat event was configured with,
+// id decodes a SampleID based on the SampleFormat event was configured with,
 // if cond is true.
-func (f *fields) idCond(cond bool, id *RecordID, sfmt SampleFormat) {
+func (f *fields) idCond(cond bool, id *SampleID, sfmt SampleFormat) {
 	if !cond {
 		return
 	}

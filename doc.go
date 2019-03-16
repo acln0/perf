@@ -51,7 +51,7 @@ Overflow records are available once the MapRing method on Event is called:
 Tracepoints are also supported:
 
 	wa := &perf.Attr{
-		RecordFormat: perf.SampleFormat{
+		SampleFormat: perf.SampleFormat{
 			Pid: true,
 			Tid: true,
 			IP:  true,

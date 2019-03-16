@@ -29,7 +29,7 @@ func TestSampleUserRegisters(t *testing.T) {
 			UserRegisters: true,
 		},
 		Options: perf.Options{
-			RecordIDAll: true,
+			SampleIDAll: true,
 		},
 		// RDI, RSI, RDX. See arch/x86/include/uapi/asm/perf_regs.h.
 		SampleRegistersUser: 0x38,
@@ -46,7 +46,7 @@ func TestSampleUserRegisters(t *testing.T) {
 			UserRegisters: true,
 		},
 		Options: perf.Options{
-			RecordIDAll: true,
+			SampleIDAll: true,
 		},
 		// RAX. See arch/x86/include/uapi/asm/perf_regs.h.
 		SampleRegistersUser: 0x1,

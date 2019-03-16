@@ -1234,9 +1234,9 @@ type Options struct {
 	// set.
 	MmapData bool
 
-	// RecordIDAll configures Tid, Time, ID, StreamID and CPU samples
+	// SampleIDAll configures Tid, Time, ID, StreamID and CPU samples
 	// to be included in non-Sample records.
-	RecordIDAll bool
+	SampleIDAll bool
 
 	// ExcludeHost configures only events happening inside a guest
 	// instance (one that has executed a KVM_RUN ioctl) to be measured.
@@ -1296,7 +1296,7 @@ func (opt Options) marshal() uint64 {
 		opt.Watermark,
 		false, false, // 2 bits for skid constraint
 		opt.MmapData,
-		opt.RecordIDAll,
+		opt.SampleIDAll,
 		opt.ExcludeHost,
 		opt.ExcludeGuest,
 		opt.ExcludeKernelCallchain,
