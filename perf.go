@@ -79,6 +79,7 @@ For more detailed information, see the examples, and man 2 perf_event_open.
 package perf
 
 import (
+	"bytes"
 	"io/ioutil"
 	"os"
 	"strconv"
@@ -103,15 +104,8 @@ func Supported() bool {
 // MaxStack returns the maximum number of frame pointers in a recorded
 // callchain. It reads the value from /proc/sys/kernel/perf_event_max_stack.
 func MaxStack() (uint16, error) {
-	content, err := ioutil.ReadFile("/proc/sys/kernel/perf_event_max_stack")
-	if err != nil {
-		return 0, err
-	}
-	maxstack, err := strconv.ParseUint(string(content), 10, 16)
-	if err != nil {
-		return 0, err
-	}
-	return uint16(maxstack), nil
+	max, err := readUint("/proc/sys/kernel/perf_event_max_stack", 16)
+	return uint16(max), err
 }
 
 // fields is a collection of 32-bit or 64-bit fields.
@@ -241,4 +235,28 @@ func marshalBitwiseUint64(fields []bool) uint64 {
 		}
 	}
 	return res
+}
+
+// readUint reads an unsigned integer from the specified sys file.
+// If readUint does not return an error, the returned integer is
+// guaranteed to fit in the specified number of bits.
+func readUint(sysfile string, bits int) (uint64, error) {
+	content, err := ioutil.ReadFile(sysfile)
+	if err != nil {
+		return 0, err
+	}
+	content = bytes.TrimSpace(content)
+	return strconv.ParseUint(string(content), 10, bits)
+}
+
+// readInt reads a signed integer from the specified sys file.
+// If readInt does not return an error, the returned integer is
+// guaranteed to fit in the specified number of bits.
+func readInt(sysfile string, bits int) (int64, error) {
+	content, err := ioutil.ReadFile(sysfile)
+	if err != nil {
+		return 0, err
+	}
+	content = bytes.TrimSpace(content)
+	return strconv.ParseInt(string(content), 10, bits)
 }

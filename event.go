@@ -8,11 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"sync"
 	"text/tabwriter"
 	"time"
@@ -770,17 +767,9 @@ func (a *Attr) SetWakeupWatermark(n uint32) {
 // LookupEventType probes /sys/bus/event_source/devices/<device>/type
 // for the EventType value associated with the specified PMU.
 func LookupEventType(pmu string) (EventType, error) {
-	p := filepath.Join("/sys/bus/event_source/devices", pmu, "type")
-	content, err := ioutil.ReadFile(p)
-	if err != nil {
-		return 0, err
-	}
-	nr := strings.TrimSpace(string(content)) // remove trailing newline
-	et, err := strconv.ParseUint(nr, 10, 32)
-	if err != nil {
-		return 0, err
-	}
-	return EventType(et), nil
+	path := filepath.Join("/sys/bus/event_source/devices", pmu, "type")
+	et, err := readUint(path, 32)
+	return EventType(et), err
 }
 
 // EventType is the overall type of a performance event.
@@ -1028,13 +1017,8 @@ func Tracepoint(category, event string) Configurator {
 // /sys/kernel/debug/tracing/events/<category>/<event>/id for the Attr.Config
 // value associated with the specified category and event.
 func LookupTracepointConfig(category, event string) (uint64, error) {
-	f := filepath.Join("/sys/kernel/debug/tracing/events", category, event, "id")
-	content, err := ioutil.ReadFile(f)
-	if err != nil {
-		return 0, err
-	}
-	nr := strings.TrimSpace(string(content)) // remove trailing newline
-	return strconv.ParseUint(nr, 10, 64)
+	p := filepath.Join("/sys/kernel/debug/tracing/events", category, event, "id")
+	return readUint(p, 64)
 }
 
 // Breakpoint returns a Configurator for a breakpoint event.
