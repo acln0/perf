@@ -110,7 +110,8 @@ func (f *fields) idCond(cond bool, id *RecordID, sfmt SampleFormat) {
 	f.uint64Cond(sfmt.Time, &id.Time)
 	f.uint64Cond(sfmt.ID, &id.ID)
 	f.uint64Cond(sfmt.StreamID, &id.StreamID)
-	f.uint32Cond(sfmt.CPU, &id.CPU, &id.Res)
+	var reserved uint32
+	f.uint32Cond(sfmt.CPU, &id.CPU, &reserved)
 	f.uint64Cond(sfmt.Identifier, &id.Identifier)
 }
 

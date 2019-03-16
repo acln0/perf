@@ -369,7 +369,7 @@ type RecordID struct {
 	ID         uint64
 	StreamID   uint64
 	CPU        uint32
-	Res        uint32
+	_          uint32 // reserved
 	Identifier uint64
 }
 
@@ -696,7 +696,7 @@ type SampleRecord struct {
 	ID         uint64
 	StreamID   uint64
 	CPU        uint32
-	Res        uint32
+	_          uint32 // reserved
 	Period     uint64
 	Count      Count
 	Callchain  []uint64
@@ -725,7 +725,8 @@ func (sr *SampleRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	f.uint64Cond(ev.a.SampleFormat.Addr, &sr.Addr)
 	f.uint64Cond(ev.a.SampleFormat.ID, &sr.ID)
 	f.uint64Cond(ev.a.SampleFormat.StreamID, &sr.StreamID)
-	f.uint32Cond(ev.a.SampleFormat.CPU, &sr.CPU, &sr.Res)
+	var reserved uint32
+	f.uint32Cond(ev.a.SampleFormat.CPU, &sr.CPU, &reserved)
 	f.uint64Cond(ev.a.SampleFormat.Period, &sr.Period)
 	if ev.a.SampleFormat.Count {
 		f.count(&sr.Count, ev.a.CountFormat)
@@ -826,7 +827,7 @@ type SampleGroupRecord struct {
 	ID         uint64
 	StreamID   uint64
 	CPU        uint32
-	Res        uint32
+	_          uint32
 	Period     uint64
 	Count      GroupCount
 	Callchain  []uint64
@@ -855,7 +856,8 @@ func (sr *SampleGroupRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	f.uint64Cond(ev.a.SampleFormat.Addr, &sr.Addr)
 	f.uint64Cond(ev.a.SampleFormat.ID, &sr.ID)
 	f.uint64Cond(ev.a.SampleFormat.StreamID, &sr.StreamID)
-	f.uint32Cond(ev.a.SampleFormat.CPU, &sr.CPU, &sr.Res)
+	var reserved uint32
+	f.uint32Cond(ev.a.SampleFormat.CPU, &sr.CPU, &reserved)
 	f.uint64Cond(ev.a.SampleFormat.Period, &sr.Period)
 	if ev.a.SampleFormat.Count {
 		f.groupCount(&sr.Count, ev.a.CountFormat)
