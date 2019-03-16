@@ -346,26 +346,22 @@ var errNoStreamID = errors.New("SampleFormat.StreamID not set")
 //
 // If target is nil, output from ev is ignored.
 //
-// Some kernel restrictions apply:
+// Some restrictions apply:
 //
-// Calling SetOutput on an *Event will fail with EINVAL if MapRing was
-// called on that event previously.
+// 1) Calling SetOutput on an *Event will fail with EINVAL if MapRing was
+// called on that event previously. 2) If ev and target are not CPU-wide
+// events, they must be on the same CPU. 3) If ev and target are CPU-wide
+// events, they must refer to the same task. 4) ev and target must use the
+// same clock.
 //
-// If ev and target are not CPU-wide events, they must be on the same CPU.
+// An additional restriction of the Go API also applies:
 //
-// If ev and target are CPU-wide events, they must refer to the same task.
-//
-// ev and target must use the same clock
-//
-// Some restrictions of the Go API also apply:
-//
-// If the SampleFormat and Options.SampleIDAll settings of ev and the target
-// do not match, the target event cannot use ReadRecord. Furthermore, in order
-// to use ReadRecord, both events must set SampleFormat.StreamID.
-//
-// If the SampleFormat and Options.SampleIDAll settings of ev and the target
-// are different, SetOutput nevertheless succeeds, because callers can still
-// use ReadRawRecord.
+// In order to use ReadRecord on the target Event, the following settings on
+// ev and target must match: Options.SampleIDAll, SampleFormat.Identifier,
+// SampleFormat.IP, SampleFormat.Tid, SampleFormat.Time, SampleFormat.Addr,
+// SampleFormat.ID, SampleFormat.StreamID. Furthermore, SampleFormat.StreamID
+// must be set. SetOutput nevertheless succeeds even if this condition is
+// not met, because callers can still use ReadRawRecord instead of ReadRecord.
 func (ev *Event) SetOutput(target *Event) error {
 	if err := ev.ok(); err != nil {
 		return err
