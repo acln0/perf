@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,6 +20,78 @@ import (
 
 	"golang.org/x/sys/unix"
 )
+
+func TestOpen(t *testing.T) {
+	t.Run("BadGroup", testOpenBadGroup)
+	t.Run("BadAttrType", testOpenBadAttrType)
+	t.Run("PopulatesLabel", testOpenPopulatesLabel)
+}
+
+func testOpenBadGroup(t *testing.T) {
+	requires(t, paranoid(1), hardwarePMU)
+
+	ca := new(perf.Attr)
+	perf.CPUCycles.Configure(ca)
+	ca.CountFormat.Group = true
+
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	cycles, err := perf.Open(ca, perf.CallingThread, perf.AnyCPU, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cycles.Close()
+
+	_, err = perf.Open(ca, perf.CallingThread, perf.AnyCPU, cycles)
+	if err == nil {
+		t.Fatal("successful Open with closed group *Event")
+	}
+
+	cycles = new(perf.Event) // uninitialized
+	_, err = perf.Open(ca, perf.CallingThread, perf.AnyCPU, cycles)
+	if err == nil {
+		t.Fatal("successful Open with closed group *Event")
+	}
+}
+
+func testOpenBadAttrType(t *testing.T) {
+	a := &perf.Attr{
+		Type: 42,
+	}
+
+	_, err := perf.Open(a, perf.CallingThread, perf.AnyCPU, nil)
+	if err == nil {
+		t.Fatal("got a valid *Event for bad Attr.Type 42")
+	}
+}
+
+func testOpenPopulatesLabel(t *testing.T) {
+	// TODO(acln): extend when we implement general label lookup
+	requires(t, paranoid(1), hardwarePMU)
+
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	ca := &perf.Attr{
+		Type:   perf.HardwareEvent,
+		Config: uint64(perf.CPUCycles),
+	}
+
+	cycles, err := perf.Open(ca, perf.CallingThread, perf.AnyCPU, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cycles.Close()
+
+	c, err := cycles.Measure(getpidTrigger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Label == "" {
+		t.Fatal("Open did not set label on *Attr")
+	}
+}
 
 func TestMain(m *testing.M) {
 	if !perf.Supported() {

@@ -16,73 +16,15 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func TestOpen(t *testing.T) {
-	t.Run("BadGroup", testOpenBadGroup)
-	t.Run("BadAttrType", testOpenBadAttrType)
-	t.Run("PopulatesLabel", testOpenPopulatesLabel)
+func TestCount(t *testing.T) {
+	t.Run("Hardware", testHardwareCounters)
+	t.Run("Software", testSoftwareCounters)
+	t.Run("HardwareCache", testHardwareCacheCounters)
+	t.Run("Tracepoint", testSingleTracepoint)
+	t.Run("IoctlAndCountIDsMatch", testIoctlAndCountIDsMatch)
 }
 
-func testOpenBadGroup(t *testing.T) {
-	requires(t, paranoid(1), hardwarePMU)
-
-	ca := new(perf.Attr)
-	perf.CPUCycles.Configure(ca)
-	ca.CountFormat.Group = true
-
-	cycles, err := perf.Open(ca, perf.CallingThread, perf.AnyCPU, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cycles.Close()
-
-	_, err = perf.Open(ca, perf.CallingThread, perf.AnyCPU, cycles)
-	if err == nil {
-		t.Fatal("successful Open with closed group *Event")
-	}
-
-	cycles = new(perf.Event) // uninitialized
-	_, err = perf.Open(ca, perf.CallingThread, perf.AnyCPU, cycles)
-	if err == nil {
-		t.Fatal("successful Open with closed group *Event")
-	}
-}
-
-func testOpenBadAttrType(t *testing.T) {
-	a := &perf.Attr{
-		Type: 42,
-	}
-
-	_, err := perf.Open(a, perf.CallingThread, perf.AnyCPU, nil)
-	if err == nil {
-		t.Fatal("got a valid *Event for bad Attr.Type 42")
-	}
-}
-
-func testOpenPopulatesLabel(t *testing.T) {
-	// TODO(acln): extend when we implement general label lookup
-	requires(t, paranoid(1), hardwarePMU)
-
-	ca := &perf.Attr{
-		Type:   perf.HardwareEvent,
-		Config: uint64(perf.CPUCycles),
-	}
-
-	cycles, err := perf.Open(ca, perf.CallingThread, perf.AnyCPU, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cycles.Close()
-
-	c, err := cycles.Measure(getpidTrigger)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if c.Label == "" {
-		t.Fatal("Open did not set label on *Attr")
-	}
-}
-
-func TestHardwareCounters(t *testing.T) {
+func testHardwareCounters(t *testing.T) {
 	requires(t, paranoid(1), hardwarePMU)
 
 	t.Run("IPC", testIPC)
@@ -121,7 +63,7 @@ func testIPC(t *testing.T) {
 	t.Logf("got %d instructions, %d cycles: %f IPC", insns, cycles, ipc)
 }
 
-func TestSoftwareCounters(t *testing.T) {
+func testSoftwareCounters(t *testing.T) {
 	requires(t, paranoid(1), softwarePMU)
 
 	t.Run("PageFaults", testPageFaults)
@@ -158,7 +100,7 @@ func testPageFaults(t *testing.T) {
 	t.Logf("saw %d page faults", c.Value)
 }
 
-func TestHardwareCacheCounters(t *testing.T) {
+func testHardwareCacheCounters(t *testing.T) {
 	// TODO(acln): add PMU requirement? but how?
 	//
 	// $ ls /sys/bus/event_source/devices/*/type | xargs cat
@@ -260,40 +202,28 @@ func testL1DataMissesGoodLocality(t *testing.T) {
 	t.Logf("good locality: got %d L1 data cache misses", c.Value)
 }
 
-func TestCountFormatID(t *testing.T) {
-	requires(t, paranoid(1), softwarePMU)
+func testSingleTracepoint(t *testing.T) {
+	requires(t, paranoid(1), tracepointPMU, debugfs)
 
-	pfa := new(perf.Attr)
-	perf.PageFaults.Configure(pfa)
-	pfa.CountFormat.ID = true
-
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-
-	faults, err := perf.Open(pfa, perf.CallingThread, perf.AnyCPU, nil)
-	if err != nil {
-		t.Fatal(err)
+	tests := []singleTracepointTest{
+		{
+			category: "syscalls",
+			event:    "sys_enter_getpid",
+			trigger:  getpidTrigger,
+		},
+		{
+			category: "syscalls",
+			event:    "sys_enter_read",
+			trigger:  readTrigger,
+		},
+		{
+			category: "syscalls",
+			event:    "sys_enter_write",
+			trigger:  writeTrigger,
+		},
 	}
-
-	runtime.GC()
-
-	c, err := faults.Measure(func() {
-		fault = make([]byte, 64*1024*1024)
-		fault[0] = 1
-		fault[63*1024*1024] = 1
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if c.Value == 0 {
-		t.Fatal("didn't see a page fault")
-	}
-	id, err := faults.ID()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if id != c.ID {
-		t.Fatalf("got ID %d from ioctl, but %d from count read", id, c.ID)
+	for _, tt := range tests {
+		t.Run(tt.String(), tt.run)
 	}
 }
 
@@ -334,28 +264,40 @@ func (tt singleTracepointTest) String() string {
 	return tt.category + ":" + tt.event
 }
 
-func TestSingleTracepoint(t *testing.T) {
-	requires(t, paranoid(1), tracepointPMU, debugfs)
+func testIoctlAndCountIDsMatch(t *testing.T) {
+	requires(t, paranoid(1), softwarePMU)
 
-	tests := []singleTracepointTest{
-		{
-			category: "syscalls",
-			event:    "sys_enter_getpid",
-			trigger:  getpidTrigger,
-		},
-		{
-			category: "syscalls",
-			event:    "sys_enter_read",
-			trigger:  readTrigger,
-		},
-		{
-			category: "syscalls",
-			event:    "sys_enter_write",
-			trigger:  writeTrigger,
-		},
+	pfa := new(perf.Attr)
+	perf.PageFaults.Configure(pfa)
+	pfa.CountFormat.ID = true
+
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	faults, err := perf.Open(pfa, perf.CallingThread, perf.AnyCPU, nil)
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, tt := range tests {
-		t.Run(tt.String(), tt.run)
+
+	runtime.GC()
+
+	c, err := faults.Measure(func() {
+		fault = make([]byte, 64*1024*1024)
+		fault[0] = 1
+		fault[63*1024*1024] = 1
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Value == 0 {
+		t.Fatal("didn't see a page fault")
+	}
+	id, err := faults.ID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != c.ID {
+		t.Fatalf("got ID %d from ioctl, but %d from count read", id, c.ID)
 	}
 }
 
