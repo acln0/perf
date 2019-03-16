@@ -31,7 +31,11 @@ func testHardwareCounters(t *testing.T) {
 }
 
 func testIPC(t *testing.T) {
-	var g perf.Group
+	g := perf.Group{
+		CountFormat: perf.CountFormat{
+			ID: true,
+		},
+	}
 	g.Add(perf.Instructions, perf.CPUCycles)
 
 	runtime.LockOSThread()
@@ -72,7 +76,12 @@ func testSoftwareCounters(t *testing.T) {
 var fault []byte
 
 func testPageFaults(t *testing.T) {
-	pfa := new(perf.Attr)
+	pfa := &perf.Attr{
+		CountFormat: perf.CountFormat{
+			Running: true,
+			Enabled: true,
+		},
+	}
 	perf.PageFaults.Configure(pfa)
 
 	runtime.LockOSThread()
@@ -97,7 +106,7 @@ func testPageFaults(t *testing.T) {
 	if c.Value == 0 {
 		t.Fatal("didn't see a page fault")
 	}
-	t.Logf("saw %d page faults", c.Value)
+	t.Logf("saw %v: enabled: %v, running: %v", c, c.Enabled, c.Running)
 }
 
 func testHardwareCacheCounters(t *testing.T) {

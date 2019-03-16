@@ -21,11 +21,13 @@ func TestRecord(t *testing.T) {
 	t.Run("SampleTracepointPidConcurrent", testSampleTracepointPidConcurrent)
 	t.Run("SampleTracepointStack", testSampleTracepointStack)
 	t.Run("RedirectManualWire", testRedirectManualWire)
+	t.Run("Refresh", testRefresh)
 }
 
 func testRingPoll(t *testing.T) {
 	t.Run("Timeout", testPollTimeout)
 	t.Run("Cancel", testPollCancel)
+	t.Run("Expired", testPollExpired)
 }
 
 func testPollTimeout(t *testing.T) {
@@ -90,7 +92,7 @@ func testPollTimeout(t *testing.T) {
 		t.Fatalf("got %v", err)
 	case err := <-errch:
 		if err != context.DeadlineExceeded {
-			t.Fatalf("got %v, want %v", err, context.DeadlineExceeded)
+			t.Fatalf("got %v, want context.DeadlineExceeded", err)
 		}
 	}
 }
@@ -160,6 +162,40 @@ func testPollCancel(t *testing.T) {
 		if err != context.Canceled {
 			t.Fatalf("got %v, want %v", err, context.Canceled)
 		}
+	}
+}
+
+func testPollExpired(t *testing.T) {
+	requires(t, softwarePMU) // TODO(acln): paranoid
+
+	da := new(perf.Attr)
+	perf.Dummy.Configure(da)
+
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	dummy, err := perf.Open(da, perf.CallingThread, perf.AnyCPU, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dummy.Close()
+	if err := dummy.MapRing(); err != nil {
+		t.Fatal(err)
+	}
+
+	timeout := 1 * time.Millisecond
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	// Wait until the deadline is in the past.
+	time.Sleep(2 * timeout)
+
+	rec, err := dummy.ReadRecord(ctx)
+	if err == nil {
+		t.Fatalf("got nil error and record %#v", rec)
+	}
+	if err != context.DeadlineExceeded {
+		t.Fatalf("got %v, want context.DeadlineExceeded", err)
 	}
 }
 
@@ -473,4 +509,71 @@ func testRedirectManualWire(t *testing.T) {
 			}
 		}
 	}
+}
+
+func testRefresh(t *testing.T) {
+	t.Skip("TODO(acln): investigate POLLHUP and IOC_REFRESH")
+
+	requires(t, tracepointPMU, debugfs)
+
+	ga := &perf.Attr{
+		SampleFormat: perf.SampleFormat{
+			Tid: true,
+		},
+		Options: perf.Options{
+			Disabled: true,
+		},
+	}
+	ga.SetSamplePeriod(1)
+	ga.SetWakeupEvents(1)
+	gtp := perf.Tracepoint("syscalls", "sys_enter_getpid")
+	if err := gtp.Configure(ga); err != nil {
+		t.Fatal(err)
+	}
+
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	getpid, err := perf.Open(ga, perf.CallingThread, perf.AnyCPU, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer getpid.Close()
+	if err := getpid.MapRing(); err != nil {
+		t.Fatal(err)
+	}
+
+	const n = 5
+
+	var (
+		records []perf.Record
+		errs    []error
+	)
+
+	done := make(chan struct{})
+
+	if err := getpid.Enable(); err != nil {
+		t.Fatal(err)
+	}
+
+	go func() {
+		for i := 0; i < n+1; i++ {
+			rec, err := getpid.ReadRecord(context.Background())
+			records = append(records, rec)
+			errs = append(errs, err)
+		}
+		close(done)
+	}()
+
+	if err := getpid.Refresh(4); err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 0; i < n; i++ {
+		getpidTrigger()
+	}
+
+	<-done
+
+	t.Log(errs)
 }

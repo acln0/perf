@@ -231,6 +231,7 @@ func (ev *Event) doPoll(req pollreq) pollresp {
 		{Fd: int32(ev.perffd), Events: unix.POLLIN},
 		{Fd: int32(ev.wakeupfd), Events: unix.POLLIN},
 	}
+
 again:
 	_, err := unix.Ppoll(pollfds, timeout, nil)
 	// TODO(acln): do we need to do this business at all? See #20400.
@@ -339,7 +340,7 @@ type SampleFormat struct {
 	// also Attr.SampleRegistersIntr.
 	IntrRegisters bool
 
-	// TODO(acln): document
+	// TODO(acln): find documentation
 	PhysicalAddress bool
 }
 
