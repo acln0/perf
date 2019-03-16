@@ -516,7 +516,7 @@ func (mr *MmapRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	f.uint64(&mr.Len)
 	f.uint64(&mr.PageOffset)
 	f.string(&mr.Filename)
-	f.id(&mr.RecordID, ev)
+	f.idCond(ev.a.Options.RecordIDAll, &mr.RecordID, ev.a.SampleFormat)
 }
 
 // Executable returns a boolean indicating whether the mapping is executable.
@@ -538,7 +538,7 @@ func (lr *LostRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	f := raw.fields()
 	f.uint64(&lr.ID)
 	f.uint64(&lr.Lost)
-	f.id(&lr.RecordID, ev)
+	f.idCond(ev.a.Options.RecordIDAll, &lr.RecordID, ev.a.SampleFormat)
 }
 
 // CommRecord (PERF_RECORD_COMM) indicates a change in the process name.
@@ -555,7 +555,7 @@ func (cr *CommRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	f := raw.fields()
 	f.uint32(&cr.Pid, &cr.Tid)
 	f.string(&cr.NewName)
-	f.id(&cr.RecordID, ev)
+	f.idCond(ev.a.Options.RecordIDAll, &cr.RecordID, ev.a.SampleFormat)
 }
 
 // commExecBit is PERF_RECORD_MISC_COMM_EXEC
@@ -584,7 +584,7 @@ func (er *ExitRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	f.uint32(&er.Pid, &er.Ppid)
 	f.uint32(&er.Tid, &er.Ptid)
 	f.uint64(&er.Time)
-	f.id(&er.RecordID, ev)
+	f.idCond(ev.a.Options.RecordIDAll, &er.RecordID, ev.a.SampleFormat)
 }
 
 // ThrottleRecord (PERF_RECORD_THROTTLE) indicates a throttle event.
@@ -602,7 +602,7 @@ func (tr *ThrottleRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	f.uint64(&tr.Time)
 	f.uint64(&tr.ID)
 	f.uint64(&tr.StreamID)
-	f.id(&tr.RecordID, ev)
+	f.idCond(ev.a.Options.RecordIDAll, &tr.RecordID, ev.a.SampleFormat)
 }
 
 // UnthrottleRecord (PERF_RECORD_UNTHROTTLE) indicates an unthrottle event.
@@ -620,7 +620,7 @@ func (ur *UnthrottleRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	f.uint64(&ur.Time)
 	f.uint64(&ur.ID)
 	f.uint64(&ur.StreamID)
-	f.id(&ur.RecordID, ev)
+	f.idCond(ev.a.Options.RecordIDAll, &ur.RecordID, ev.a.SampleFormat)
 }
 
 // ForkRecord (PERF_RECORD_FORK) indicates a fork event.
@@ -640,7 +640,7 @@ func (fr *ForkRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	f.uint32(&fr.Pid, &fr.Ppid)
 	f.uint32(&fr.Tid, &fr.Ptid)
 	f.uint64(&fr.Time)
-	f.id(&fr.RecordID, ev)
+	f.idCond(ev.a.Options.RecordIDAll, &fr.RecordID, ev.a.SampleFormat)
 }
 
 // ReadRecord (PERF_RECORD_READ) indicates a read event.
@@ -656,7 +656,8 @@ func (rr *ReadRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	rr.RecordHeader = raw.Header
 	f := raw.fields()
 	f.uint32(&rr.Pid, &rr.Tid)
-	f.count(&rr.Count, ev)
+	f.count(&rr.Count, ev.a.CountFormat)
+	f.idCond(ev.a.Options.RecordIDAll, &rr.RecordID, ev.a.SampleFormat)
 }
 
 // ReadGroupRecord (PERF_RECORD_READ) indicates a read event on a group event.
@@ -672,7 +673,8 @@ func (rr *ReadGroupRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	rr.RecordHeader = raw.Header
 	f := raw.fields()
 	f.uint32(&rr.Pid, &rr.Tid)
-	f.groupCount(&rr.GroupCount, ev)
+	f.groupCount(&rr.GroupCount, ev.a.CountFormat)
+	f.idCond(ev.a.Options.RecordIDAll, &rr.RecordID, ev.a.SampleFormat)
 }
 
 // SampleRecord indicates a sample.
@@ -726,7 +728,7 @@ func (sr *SampleRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	f.uint32Cond(ev.a.SampleFormat.CPU, &sr.CPU, &sr.Res)
 	f.uint64Cond(ev.a.SampleFormat.Period, &sr.Period)
 	if ev.a.SampleFormat.Count {
-		f.count(&sr.Count, ev)
+		f.count(&sr.Count, ev.a.CountFormat)
 	}
 	if ev.a.SampleFormat.Callchain {
 		var nr uint64
@@ -856,7 +858,7 @@ func (sr *SampleGroupRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	f.uint32Cond(ev.a.SampleFormat.CPU, &sr.CPU, &sr.Res)
 	f.uint64Cond(ev.a.SampleFormat.Period, &sr.Period)
 	if ev.a.SampleFormat.Count {
-		f.groupCount(&sr.Count, ev)
+		f.groupCount(&sr.Count, ev.a.CountFormat)
 	}
 	if ev.a.SampleFormat.Callchain {
 		var nr uint64
@@ -994,7 +996,7 @@ func (mr *Mmap2Record) DecodeFrom(raw *RawRecord, ev *Event) {
 	f.uint64(&mr.InodeGeneration)
 	f.uint32(&mr.Prot, &mr.Flags)
 	f.string(&mr.Filename)
-	f.id(&mr.RecordID, ev)
+	f.idCond(ev.a.Options.RecordIDAll, &mr.RecordID, ev.a.SampleFormat)
 }
 
 // Executable returns a boolean indicating whether the mapping is executable.
@@ -1034,7 +1036,7 @@ func (ar *AuxRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	var flag uint64
 	f.uint64(&flag)
 	ar.Flags = AuxFlag(flag)
-	f.id(&ar.RecordID, ev)
+	f.idCond(ev.a.Options.RecordIDAll, &ar.RecordID, ev.a.SampleFormat)
 }
 
 // ItraceStartRecord (PERF_RECORD_ITRACE_START) indicates which process
@@ -1051,7 +1053,7 @@ func (ir *ItraceStartRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	ir.RecordHeader = raw.Header
 	f := raw.fields()
 	f.uint32(&ir.Pid, &ir.Tid)
-	f.id(&ir.RecordID, ev)
+	f.idCond(ev.a.Options.RecordIDAll, &ir.RecordID, ev.a.SampleFormat)
 }
 
 // LostSamplesRecord (PERF_RECORD_LOST_SAMPLES) indicates some number of
@@ -1067,7 +1069,7 @@ func (lr *LostSamplesRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	lr.RecordHeader = raw.Header
 	f := raw.fields()
 	f.uint64(&lr.Lost)
-	f.id(&lr.RecordID, ev)
+	f.idCond(ev.a.Options.RecordIDAll, &lr.RecordID, ev.a.SampleFormat)
 }
 
 // SwitchRecord (PERF_RECORD_SWITCH) indicates that a context switch has
@@ -1080,7 +1082,7 @@ type SwitchRecord struct {
 func (sr *SwitchRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	sr.RecordHeader = raw.Header
 	f := raw.fields()
-	f.id(&sr.RecordID, ev)
+	f.idCond(ev.a.Options.RecordIDAll, &sr.RecordID, ev.a.SampleFormat)
 }
 
 // switchOutBit is PERF_RECORD_MISC_SWITCH_OUT
@@ -1114,7 +1116,7 @@ func (sr *SwitchCPUWideRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	sr.RecordHeader = raw.Header
 	f := raw.fields()
 	f.uint32(&sr.Pid, &sr.Tid)
-	f.id(&sr.RecordID, ev)
+	f.idCond(ev.a.Options.RecordIDAll, &sr.RecordID, ev.a.SampleFormat)
 }
 
 // Out returns a boolean indicating whether the context switch was
@@ -1153,7 +1155,7 @@ func (nr *NamespacesRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 		f.uint64(&nr.Namespaces[i].Dev)
 		f.uint64(&nr.Namespaces[i].Inode)
 	}
-	f.id(&nr.RecordID, ev)
+	f.idCond(ev.a.Options.RecordIDAll, &nr.RecordID, ev.a.SampleFormat)
 }
 
 // Skid is an instruction pointer skid constraint.

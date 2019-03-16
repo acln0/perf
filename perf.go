@@ -180,39 +180,40 @@ func (f *fields) string(s *string) {
 	}
 }
 
-// id decodes a RecordID based on the SampleFormat ev was configured with.
-func (f *fields) id(id *RecordID, ev *Event) {
-	if !ev.a.Options.RecordIDAll {
+// id decodes a RecordID based on the SampleFormat event was configured with,
+// if cond is true.
+func (f *fields) idCond(cond bool, id *RecordID, sfmt SampleFormat) {
+	if !cond {
 		return
 	}
-	f.uint32Cond(ev.a.SampleFormat.Tid, &id.Pid, &id.Tid)
-	f.uint64Cond(ev.a.SampleFormat.Time, &id.Time)
-	f.uint64Cond(ev.a.SampleFormat.ID, &id.ID)
-	f.uint64Cond(ev.a.SampleFormat.StreamID, &id.StreamID)
-	f.uint32Cond(ev.a.SampleFormat.CPU, &id.CPU, &id.Res)
-	f.uint64Cond(ev.a.SampleFormat.Identifier, &id.Identifier)
+	f.uint32Cond(sfmt.Tid, &id.Pid, &id.Tid)
+	f.uint64Cond(sfmt.Time, &id.Time)
+	f.uint64Cond(sfmt.ID, &id.ID)
+	f.uint64Cond(sfmt.StreamID, &id.StreamID)
+	f.uint32Cond(sfmt.CPU, &id.CPU, &id.Res)
+	f.uint64Cond(sfmt.Identifier, &id.Identifier)
 }
 
 // count decodes a Count into c.
-func (f *fields) count(c *Count, ev *Event) {
+func (f *fields) count(c *Count, cfmt CountFormat) {
 	f.uint64(&c.Value)
-	if ev.a.CountFormat.Enabled {
+	if cfmt.Enabled {
 		f.duration(&c.Enabled)
 	}
-	if ev.a.CountFormat.Running {
+	if cfmt.Running {
 		f.duration(&c.Running)
 	}
-	f.uint64Cond(ev.a.CountFormat.ID, &c.ID)
+	f.uint64Cond(cfmt.ID, &c.ID)
 }
 
 // groupCount decodes a GroupCount into gc.
-func (f *fields) groupCount(gc *GroupCount, ev *Event) {
+func (f *fields) groupCount(gc *GroupCount, cfmt CountFormat) {
 	var nr uint64
 	f.uint64(&nr)
-	if ev.a.CountFormat.Enabled {
+	if cfmt.Enabled {
 		f.duration(&gc.TimeEnabled)
 	}
-	if ev.a.CountFormat.Running {
+	if cfmt.Running {
 		f.duration(&gc.TimeRunning)
 	}
 	gc.Values = make([]struct {
@@ -221,7 +222,7 @@ func (f *fields) groupCount(gc *GroupCount, ev *Event) {
 	}, nr)
 	for i := 0; i < int(nr); i++ {
 		f.uint64(&gc.Values[i].Value)
-		f.uint64Cond(ev.a.CountFormat.ID, &gc.Values[i].ID)
+		f.uint64Cond(cfmt.ID, &gc.Values[i].ID)
 	}
 }
 

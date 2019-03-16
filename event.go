@@ -501,7 +501,7 @@ func (ev *Event) ReadCount() (Count, error) {
 	}
 
 	f := fields(buf)
-	f.count(&c, ev)
+	f.count(&c, ev.a.CountFormat)
 	c.Label = ev.a.Label
 
 	return c, err
@@ -579,7 +579,7 @@ func (ev *Event) ReadGroupCount() (GroupCount, error) {
 	}
 
 	f := fields(buf)
-	f.groupCount(&gc, ev)
+	f.groupCount(&gc, ev.a.CountFormat)
 	gc.Values[0].Label = ev.a.Label
 	for i := 0; i < len(ev.group); i++ {
 		gc.Values[i+1].Label = ev.group[i].a.Label
