@@ -5,6 +5,7 @@
 package perf_test
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"runtime"
@@ -104,4 +105,41 @@ func ExampleTracepoint_getpid() {
 
 	fmt.Printf("saw getpid %d times\n", c.Value)
 	// Output: saw getpid 3 times
+}
+
+func ExampleMmapRecord_plugin() {
+	var targetpid int // pid of the monitored process
+
+	da := &perf.Attr{
+		Options: perf.Options{
+			Mmap: true,
+		},
+	}
+	da.SetSamplePeriod(1)
+	da.SetWakeupEvents(1)
+	perf.Dummy.Configure(da) // configure a dummy event, so we can Open it
+
+	mmap, err := perf.Open(da, targetpid, perf.AnyCPU, nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err := mmap.MapRing(); err != nil {
+		log.Fatal(err)
+	}
+
+	// Monitor the target process, wait for it to load something like
+	// a plugin, or a shared library, which requires a PROT_EXEC mapping.
+
+	for {
+		rec, err := mmap.ReadRecord(context.Background())
+		if err != nil {
+			log.Fatal(err)
+		}
+		mr, ok := rec.(*perf.MmapRecord)
+		if !ok {
+			continue
+		}
+		fmt.Printf("pid %d created a PROT_EXEC mapping at %#x: %s",
+			mr.Pid, mr.Addr, mr.Filename)
+	}
 }
