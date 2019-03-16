@@ -70,9 +70,9 @@ func (ev *Event) ReadCount() (Count, error) {
 //
 // Fields are populated as described in the Count documentation.
 type GroupCount struct {
-	TimeEnabled time.Duration
-	TimeRunning time.Duration
-	Values      []struct {
+	Enabled time.Duration
+	Running time.Duration
+	Values  []struct {
 		Value uint64
 		ID    uint64
 		Label string

@@ -14,27 +14,26 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func ExampleEvent_Measure_hardware() {
-	cyclesattr := &perf.Attr{
+func ExampleHardwareCounter_IPC() {
+	g := perf.Group{
 		CountFormat: perf.CountFormat{
 			Running: true,
 		},
 	}
-	perf.CPUCycles.Configure(cyclesattr)
+	g.Add(perf.Instructions, perf.CPUCycles)
 
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	ev, err := perf.Open(cyclesattr, perf.CallingThread, perf.AnyCPU, nil)
+	ipc, err := g.Open(perf.CallingThread, perf.AnyCPU)
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer ev.Close()
+	defer ipc.Close()
 
 	sum := 0
-
-	c, err := ev.Measure(func() {
-		for i := 0; i < 1000000; i++ {
+	gc, err := ipc.MeasureGroup(func() {
+		for i := 0; i < 100000; i++ {
 			sum += i
 		}
 	})
@@ -42,7 +41,10 @@ func ExampleEvent_Measure_hardware() {
 		log.Fatal(err)
 	}
 
-	fmt.Printf("got sum %d in %d CPU cycles (%v)", sum, c.Value, c.Running)
+	insns, cycles := gc.Values[0].Value, gc.Values[1].Value
+
+	fmt.Printf("got sum = %d in %v: %d instructions, %d CPU cycles: %f IPC",
+		sum, gc.Running, insns, cycles, float64(insns)/float64(cycles))
 }
 
 func ExampleEvent_Measure_tracepoint() {

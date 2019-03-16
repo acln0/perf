@@ -6,7 +6,6 @@ package perf
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"io/ioutil"
 	"os"
@@ -339,8 +338,6 @@ func (ev *Event) UpdatePeriod(p uint64) error {
 	return wrapIoctlError("PERF_EVENT_IOC_PERIOD", err)
 }
 
-var errNoStreamID = errors.New("SampleFormat.StreamID not set")
-
 // SetOutput tells the kernel to send records to the specified
 // target Event rather than ev.
 //
@@ -395,7 +392,7 @@ func (ev *Event) canReadRecordFrom(f *Event) bool {
 		lf.Addr == ff.Addr &&
 		lf.ID == ff.ID &&
 		lf.StreamID == ff.StreamID &&
-		ff.StreamID == true
+		ff.StreamID
 }
 
 // BUG(acln): PERF_EVENT_IOC_SET_FILTER is not implemented
@@ -1291,10 +1288,10 @@ func (f *fields) groupCount(gc *GroupCount, cfmt CountFormat) {
 	var nr uint64
 	f.uint64(&nr)
 	if cfmt.Enabled {
-		f.duration(&gc.TimeEnabled)
+		f.duration(&gc.Enabled)
 	}
 	if cfmt.Running {
-		f.duration(&gc.TimeRunning)
+		f.duration(&gc.Running)
 	}
 	gc.Values = make([]struct {
 		Value, ID uint64
