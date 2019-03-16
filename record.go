@@ -235,8 +235,8 @@ again:
 	// errors except EINTR. The machinery is documented in more detail
 	// in ReadRawRecord.
 	return pollresp{
-		perfready: pollfds[0].Events&unix.POLLIN != 0,
-		perfhup:   pollfds[0].Events&unix.POLLHUP != 0,
+		perfready: pollfds[0].Revents&unix.POLLIN != 0,
+		perfhup:   pollfds[0].Revents&unix.POLLHUP != 0,
 		err:       os.NewSyscallError("ppoll", err),
 	}
 }

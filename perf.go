@@ -175,15 +175,3 @@ func readUint(sysfile string, bits int) (uint64, error) {
 	content = bytes.TrimSpace(content)
 	return strconv.ParseUint(string(content), 10, bits)
 }
-
-// readInt reads a signed integer from the specified sys file.
-// If readInt does not return an error, the returned integer is
-// guaranteed to fit in the specified number of bits.
-func readInt(sysfile string, bits int) (int64, error) {
-	content, err := ioutil.ReadFile(sysfile)
-	if err != nil {
-		return 0, err
-	}
-	content = bytes.TrimSpace(content)
-	return strconv.ParseInt(string(content), 10, bits)
-}

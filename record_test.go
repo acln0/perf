@@ -77,7 +77,9 @@ func testPollTimeout(t *testing.T) {
 	// Now, we should get a timeout.
 	select {
 	case <-time.After(2 * timeout):
-		t.Fatalf("didn't time out")
+		t.Logf("didn't time out, waiting")
+		err := <-errch
+		t.Fatalf("got %v", err)
 	case err := <-errch:
 		if err != context.DeadlineExceeded {
 			t.Fatalf("got %v, want %v", err, context.DeadlineExceeded)
