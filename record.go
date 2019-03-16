@@ -747,20 +747,11 @@ func (sr *SampleRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 		f.uint64(&nr)
 		sr.BranchStack = make([]BranchEntry, nr)
 		for i := 0; i < len(sr.BranchStack); i++ {
-			var from, to, tmp uint64
+			var from, to, entry uint64
 			f.uint64(&from)
 			f.uint64(&to)
-			f.uint64(&tmp)
-			sr.BranchStack[i] = BranchEntry{
-				From:             from,
-				To:               to,
-				Mispredicted:     tmp&(1<<0) != 0,
-				Predicted:        tmp&(1<<1) != 0,
-				InTransaction:    tmp&(1<<2) != 0,
-				TransactionAbort: tmp&(1<<3) != 0,
-				Cycles:           uint16((tmp << 44) >> 48),
-				BranchType:       BranchType((tmp << 40) >> 44),
-			}
+			f.uint64(&entry)
+			sr.BranchStack[i].decode(from, to, entry)
 		}
 	}
 	if ev.a.SampleFormat.UserRegisters {
@@ -878,20 +869,11 @@ func (sr *SampleGroupRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 		f.uint64(&nr)
 		sr.BranchStack = make([]BranchEntry, nr)
 		for i := 0; i < len(sr.BranchStack); i++ {
-			var from, to, tmp uint64
+			var from, to, entry uint64
 			f.uint64(&from)
 			f.uint64(&to)
-			f.uint64(&tmp)
-			sr.BranchStack[i] = BranchEntry{
-				From:             from,
-				To:               to,
-				Mispredicted:     tmp&(1<<0) != 0,
-				Predicted:        tmp&(1<<1) != 0,
-				InTransaction:    tmp&(1<<2) != 0,
-				TransactionAbort: tmp&(1<<3) != 0,
-				Cycles:           uint16((tmp << 44) >> 48),
-				BranchType:       BranchType((tmp << 40) >> 44),
-			}
+			f.uint64(&entry)
+			sr.BranchStack[i].decode(from, to, entry)
 		}
 	}
 	if ev.a.SampleFormat.UserRegisters {
@@ -947,6 +929,19 @@ type BranchEntry struct {
 	TransactionAbort bool
 	Cycles           uint16
 	BranchType       BranchType
+}
+
+func (be *BranchEntry) decode(from, to, entry uint64) {
+	*be = BranchEntry{
+		From:             from,
+		To:               to,
+		Mispredicted:     entry&(1<<0) != 0,
+		Predicted:        entry&(1<<1) != 0,
+		InTransaction:    entry&(1<<2) != 0,
+		TransactionAbort: entry&(1<<3) != 0,
+		Cycles:           uint16((entry << 44) >> 48),
+		BranchType:       BranchType((entry << 40) >> 44),
+	}
 }
 
 type BranchType uint8
