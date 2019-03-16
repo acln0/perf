@@ -14,7 +14,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func ExampleHardwareCounter_IPC() {
+func ExampleHardwareCounter_iPC() {
 	g := perf.Group{
 		CountFormat: perf.CountFormat{
 			Running: true,
