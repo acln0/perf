@@ -61,10 +61,11 @@ func testGroupRecord(t *testing.T) {
 			Disabled: true,
 		},
 		SampleFormat: perf.SampleFormat{
-			Tid:  true,
-			Time: true,
-			CPU:  true,
-			IP:   true,
+			Tid:      true,
+			Time:     true,
+			CPU:      true,
+			IP:       true,
+			StreamID: true,
 		},
 	}
 	ga.SetSamplePeriod(1)
@@ -76,10 +77,11 @@ func testGroupRecord(t *testing.T) {
 
 	wa := &perf.Attr{
 		SampleFormat: perf.SampleFormat{
-			Tid:  true,
-			Time: true,
-			CPU:  true,
-			IP:   true,
+			Tid:      true,
+			Time:     true,
+			CPU:      true,
+			IP:       true,
+			StreamID: true,
 		},
 	}
 	wa.SetSamplePeriod(1)

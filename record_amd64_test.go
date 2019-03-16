@@ -18,14 +18,12 @@ import (
 func TestSampleUserRegisters(t *testing.T) {
 	requires(t, tracepointPMU, debugfs) // TODO(acln): paranoid
 
-	// TODO(acln): rewrite this to use groups rather than manual wiring,
-	// when reading sampling records from groups is supported correctly.
-
 	wea := &perf.Attr{
 		CountFormat: perf.CountFormat{
 			Group: true,
 		},
 		SampleFormat: perf.SampleFormat{
+			StreamID:      true,
 			UserRegisters: true,
 		},
 		Options: perf.Options{
@@ -43,6 +41,7 @@ func TestSampleUserRegisters(t *testing.T) {
 
 	wxa := &perf.Attr{
 		SampleFormat: perf.SampleFormat{
+			StreamID:      true,
 			UserRegisters: true,
 		},
 		Options: perf.Options{
@@ -58,24 +57,14 @@ func TestSampleUserRegisters(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	var g perf.Group
+	g.Add(wea, wxa)
+
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	wentry, err := perf.Open(wea, perf.CallingThread, perf.AnyCPU, nil)
+	write, err := g.Open(perf.CallingThread, perf.AnyCPU)
 	if err != nil {
-		t.Fatal(err)
-	}
-	defer wentry.Close()
-	if err := wentry.MapRing(); err != nil {
-		t.Fatal(err)
-	}
-
-	wexit, err := perf.Open(wxa, perf.CallingThread, perf.AnyCPU, wentry)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer wexit.Close()
-	if err := wexit.MapRing(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -89,7 +78,7 @@ func TestSampleUserRegisters(t *testing.T) {
 
 	var n int
 	var werr error
-	gc, err := wentry.MeasureGroup(func() {
+	gc, err := write.MeasureGroup(func() {
 		n, werr = null.Write(buf)
 	})
 	if err != nil {
@@ -108,7 +97,7 @@ func TestSampleUserRegisters(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 
-	entryrec, err := wentry.ReadRecord(ctx)
+	entryrec, err := write.ReadRecord(ctx)
 	if err != nil {
 		t.Fatalf("got %v, want a valid record", err)
 	}
@@ -140,13 +129,13 @@ func TestSampleUserRegisters(t *testing.T) {
 		t.Errorf("count: rdx = %d, want %d", rdx, bufsize)
 	}
 
-	exitrec, err := wexit.ReadRecord(ctx)
+	exitrec, err := write.ReadRecord(ctx)
 	if err != nil {
 		t.Fatalf("got %v, want a valid record", err)
 	}
-	exitsr, ok := exitrec.(*perf.SampleRecord)
+	exitsr, ok := exitrec.(*perf.SampleGroupRecord)
 	if !ok {
-		t.Fatalf("got %T, want SampleRecord", exitrec)
+		t.Fatalf("got %T, want SampleGroupRecord", exitrec)
 	}
 	if nregs := len(exitsr.UserRegisters); nregs != 1 {
 		t.Fatalf("got %d registers, want 1", nregs)

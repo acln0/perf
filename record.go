@@ -22,7 +22,12 @@ import (
 // associated counter has reached zero, or - starting with Linux 3.18 -
 // if the event being monitored is attached to a different process and that
 // process exits.
-var ErrDisabled = errors.New("event disabled")
+var ErrDisabled = errors.New("perf: event disabled")
+
+// ErrNoReadRecord is returned by ReadRecord when it is disabled on a
+// group event, due to different configurations of the leader and follower
+// events. See also (*Event).SetOutput.
+var ErrNoReadRecord = errors.New("perf: ReadRecord disabled")
 
 // ReadRecord reads and decodes a record from the ring buffer associated
 // with ev.
@@ -30,9 +35,16 @@ var ErrDisabled = errors.New("event disabled")
 // ReadRecord may be called concurrently with ReadCount or ReadGroupCount,
 // but not concurrently with itself, ReadRawRecord, Close, or any other
 // Event method.
+//
+// If another event's records were routed to ev via SetOutput, and the
+// two events did not have identical SampleFormat and Options.SampleIDAll
+// settings, ReadRecord fails, and returns ErrNoReadRecord.
 func (ev *Event) ReadRecord(ctx context.Context) (Record, error) {
 	if err := ev.ok(); err != nil {
 		return nil, err
+	}
+	if ev.noReadRecord {
+		return nil, ErrNoReadRecord
 	}
 	var raw RawRecord
 	if err := ev.ReadRawRecord(ctx, &raw); err != nil {
@@ -726,6 +738,17 @@ func (sr *SampleRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	f.uint64Cond(ev.a.SampleFormat.Addr, &sr.Addr)
 	f.uint64Cond(ev.a.SampleFormat.ID, &sr.ID)
 	f.uint64Cond(ev.a.SampleFormat.StreamID, &sr.StreamID)
+
+	// If we have a StreamID and it is different from our
+	// own ID, then the output from the event we're interested
+	// in was redirected to ev. We must switch to that event
+	// in order to decode the sample.
+	if ev.a.SampleFormat.StreamID {
+		if sr.StreamID != ev.id {
+			ev = ev.groupByID[sr.StreamID]
+		}
+	}
+
 	var reserved uint32
 	f.uint32Cond(ev.a.SampleFormat.CPU, &sr.CPU, &reserved)
 	f.uint64Cond(ev.a.SampleFormat.Period, &sr.Period)
@@ -848,6 +871,17 @@ func (sr *SampleGroupRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	f.uint64Cond(ev.a.SampleFormat.Addr, &sr.Addr)
 	f.uint64Cond(ev.a.SampleFormat.ID, &sr.ID)
 	f.uint64Cond(ev.a.SampleFormat.StreamID, &sr.StreamID)
+
+	// If we have a StreamID and it is different from our
+	// own ID, then the output from the event we're interested
+	// in was redirected to ev. We must switch to that event
+	// in order to decode the sample.
+	if ev.a.SampleFormat.StreamID {
+		if sr.StreamID != ev.id {
+			ev = ev.groupByID[sr.StreamID]
+		}
+	}
+
 	var reserved uint32
 	f.uint32Cond(ev.a.SampleFormat.CPU, &sr.CPU, &reserved)
 	f.uint64Cond(ev.a.SampleFormat.Period, &sr.Period)

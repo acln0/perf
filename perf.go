@@ -6,6 +6,7 @@ package perf
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"os"
@@ -43,12 +44,20 @@ type Event struct {
 	// state is the state of the event. See eventState* constants.
 	state int32
 
-	// perffd is the event file descriptor.
+	// perffd is the perf event file descriptor.
 	perffd int
 
-	// group contains other events in the event group, if this event is an
-	// event group leader.
+	// id is the unique event ID.
+	id uint64
+
+	// group contains other events in the event group, if this event is
+	// an event group leader. The order is the order in which the events
+	// were added to the group.
 	group []*Event
+
+	// groupByID maps group event IDs to the events themselves. The
+	// reason why this mapping is needed is explained in ReadRecord.
+	groupByID map[uint64]*Event
 
 	// owned contains other events in the event group, which the caller
 	// has no access to. The Event owns them all, Close closes them all.
@@ -58,6 +67,10 @@ type Event struct {
 	// a clone of the original, save for the Label field, which may have
 	// been set, if the original *Attr didn't set it.
 	a *Attr
+
+	// noReadRecord is true if ReadRecord is disabled for the event.
+	// See SetOutput and ReadRecord.
+	noReadRecord bool
 
 	// ring is the (entire) memory mapped ring buffer.
 	ring []byte
@@ -157,8 +170,17 @@ func open(a *Attr, pid, cpu int, group *Event, flags int) (*Event, error) {
 		perffd: fd,
 		a:      ac,
 	}
+	id, err := ev.ID()
+	if err != nil {
+		return nil, err
+	}
+	ev.id = id
 	if group != nil {
+		if group.groupByID == nil {
+			group.groupByID = map[uint64]*Event{}
+		}
 		group.group = append(group.group, ev)
+		group.groupByID[id] = ev
 	}
 
 	return ev, nil
@@ -317,21 +339,33 @@ func (ev *Event) UpdatePeriod(p uint64) error {
 	return wrapIoctlError("PERF_EVENT_IOC_PERIOD", err)
 }
 
+var errNoStreamID = errors.New("SampleFormat.StreamID not set")
+
 // SetOutput tells the kernel to send records to the specified
 // target Event rather than ev.
 //
 // If target is nil, output from ev is ignored.
 //
-// Some restrictions apply:
+// Some kernel restrictions apply:
 //
-// * calling SetOutput on an *Event will fail with EINVAL if MapRing was
-// called on that event previously
+// Calling SetOutput on an *Event will fail with EINVAL if MapRing was
+// called on that event previously.
 //
-// * if ev and target are not CPU-wide events, they must be on the same CPU
+// If ev and target are not CPU-wide events, they must be on the same CPU.
 //
-// * if ev and target are CPU-wide events, they must refer to the same task
+// If ev and target are CPU-wide events, they must refer to the same task.
 //
-// * ev and target must use the same clock
+// ev and target must use the same clock
+//
+// Some restrictions of the Go API also apply:
+//
+// If the SampleFormat and Options.SampleIDAll settings of ev and the target
+// do not match, the target event cannot use ReadRecord. Furthermore, in order
+// to use ReadRecord, both events must set SampleFormat.StreamID.
+//
+// If the SampleFormat and Options.SampleIDAll settings of ev and the target
+// are different, SetOutput nevertheless succeeds, because callers can still
+// use ReadRawRecord.
 func (ev *Event) SetOutput(target *Event) error {
 	if err := ev.ok(); err != nil {
 		return err
@@ -343,13 +377,32 @@ func (ev *Event) SetOutput(target *Event) error {
 		if err := target.ok(); err != nil {
 			return err
 		}
+		if !target.canReadRecordFrom(ev) {
+			target.noReadRecord = true
+		}
 		targetfd = target.perffd
 	}
 	err := ev.ioctlInt(unix.PERF_EVENT_IOC_SET_OUTPUT, uintptr(targetfd))
 	return wrapIoctlError("PERF_EVENT_IOC_SET_OUTPUT", err)
 }
 
-// BUG(acln): (*Event).SetFtraceFilter is not implemented
+// canReadRecordFrom returns a boolean indicating whether ev, as a leader,
+// can read records produced by f, a follower.
+func (ev *Event) canReadRecordFrom(f *Event) bool {
+	lf := ev.a.SampleFormat
+	ff := f.a.SampleFormat
+
+	return lf.Identifier == ff.Identifier &&
+		lf.IP == ff.IP &&
+		lf.Tid == ff.Tid &&
+		lf.Time == ff.Time &&
+		lf.Addr == ff.Addr &&
+		lf.ID == ff.ID &&
+		lf.StreamID == ff.StreamID &&
+		ff.StreamID == true
+}
+
+// BUG(acln): PERF_EVENT_IOC_SET_FILTER is not implemented
 
 // ID returns the unique event ID value for ev.
 func (ev *Event) ID() (uint64, error) {
@@ -408,14 +461,7 @@ func (ev *Event) QueryBPF(max uint32) ([]uint32, error) {
 	return fds, nil
 }
 
-// ModifyAttributes modifies the attributes of an event.
-func (ev *Event) ModifyAttributes(attr *Attr) error {
-	if err := ev.ok(); err != nil {
-		return err
-	}
-	err := ev.ioctlPointer(unix.PERF_EVENT_IOC_MODIFY_ATTRIBUTES, unsafe.Pointer(attr))
-	return wrapIoctlError("PERF_EVENT_IOC_MODIFY_ATTRIBUTES", err)
-}
+// BUG(acln): PERF_EVENT_IOC_MODIFY_ATTRIBUTES is not implemented
 
 func (ev *Event) ioctlNoArg(number int) error {
 	return ev.ioctlInt(number, 0)

@@ -25,6 +25,7 @@ func TestOpen(t *testing.T) {
 	t.Run("BadGroup", testOpenBadGroup)
 	t.Run("BadAttrType", testOpenBadAttrType)
 	t.Run("PopulatesLabel", testOpenPopulatesLabel)
+	t.Run("EventIDsDifferentByCPU", testEventIDsDifferentByCPU)
 }
 
 func testOpenBadGroup(t *testing.T) {
@@ -90,6 +91,41 @@ func testOpenPopulatesLabel(t *testing.T) {
 	}
 	if c.Label == "" {
 		t.Fatal("Open did not set label on *Attr")
+	}
+}
+
+func testEventIDsDifferentByCPU(t *testing.T) {
+	if runtime.NumCPU() == 1 {
+		t.Skip("only one CPU")
+	}
+
+	ca := new(perf.Attr)
+	perf.CPUCycles.Configure(ca)
+
+	cycles0, err := perf.Open(ca, perf.CallingThread, 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cycles0.Close()
+
+	cycles1, err := perf.Open(ca, perf.CallingThread, 1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cycles1.Close()
+
+	id0, err := cycles0.ID()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	id1, err := cycles1.ID()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if id0 == id1 {
+		t.Fatalf("event has the same ID on different CPUs")
 	}
 }
 

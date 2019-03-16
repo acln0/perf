@@ -381,10 +381,11 @@ func testRedirectManualWire(t *testing.T) {
 
 	ga := &perf.Attr{
 		SampleFormat: perf.SampleFormat{
-			Tid:  true,
-			Time: true,
-			CPU:  true,
-			Addr: true,
+			Tid:      true,
+			Time:     true,
+			CPU:      true,
+			Addr:     true,
+			StreamID: true,
 		},
 		CountFormat: perf.CountFormat{
 			Group: true,
@@ -414,10 +415,11 @@ func testRedirectManualWire(t *testing.T) {
 
 	wa := &perf.Attr{
 		SampleFormat: perf.SampleFormat{
-			Tid:  true,
-			Time: true,
-			CPU:  true,
-			Addr: true,
+			Tid:      true,
+			Time:     true,
+			CPU:      true,
+			Addr:     true,
+			StreamID: true,
 		},
 	}
 	wa.SetSamplePeriod(1)
