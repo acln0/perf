@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"sync"
 	"testing"
 	"time"
 	"unsafe"
@@ -19,12 +20,13 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// TODO(acln): the paranoid requirement is not specified for these tests
+// TODO(acln): the paranoid requirement is not specified for most of these
 
 func TestReadRecord(t *testing.T) {
 	t.Run("Poll", testPoll)
 	t.Run("Comm", testComm)
 	t.Run("Exit", testExit)
+	t.Run("CPUWideSwitch", testCPUWideSwitch)
 	t.Run("SampleGetpid", testSampleGetpid)
 	t.Run("SampleGetpidConcurrent", testSampleGetpidConcurrent)
 	t.Run("SampleTracepointStack", testSampleTracepointStack)
@@ -782,6 +784,146 @@ func testExit(t *testing.T) {
 	}
 	// Unfortunately, no er.Ppid and er.Ptid test. The Go runtime
 	// interferes with us.
+}
+
+func testCPUWideSwitch(t *testing.T) {
+	requires(t, paranoid(1), softwarePMU)
+
+	var wg sync.WaitGroup
+	ready := make(chan error)
+	start := make(chan struct{})
+	pingpong := make(chan struct{})
+	var recvtid, sendtid int
+
+	const numpingpongs = 4
+	const cpu = 0
+
+	fn := func(recv bool) {
+		defer wg.Done()
+
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
+
+		var cpuset unix.CPUSet
+		cpuset.Set(cpu)
+		if err := unix.SchedSetaffinity(0, &cpuset); err != nil {
+			ready <- err
+			return
+		}
+
+		if !recv {
+			sendtid = unix.Gettid()
+			ready <- nil
+			<-start
+			for i := 0; i < numpingpongs; i++ {
+				pingpong <- struct{}{}
+				<-pingpong
+			}
+		} else {
+			recvtid = unix.Gettid()
+			ready <- nil
+			<-start
+			for i := 0; i < numpingpongs; i++ {
+				<-pingpong
+				pingpong <- struct{}{}
+			}
+		}
+	}
+
+	wg.Add(2)
+
+	go fn(true)
+	go fn(false)
+
+	if err := <-ready; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-ready; err != nil {
+		t.Fatal(err)
+	}
+
+	sa := &perf.Attr{
+		Options: perf.Options{
+			ExcludeKernel: true,
+			Disabled:      true,
+			ContextSwitch: true,
+		},
+	}
+	sa.SetSamplePeriod(1)
+	sa.SetWakeupEvents(1)
+	perf.ContextSwitches.Configure(sa)
+
+	switches, err := perf.Open(sa, perf.AllThreads, cpu, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer switches.Close()
+	if err := switches.MapRing(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := switches.Enable(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Run the ping-pong game.
+	close(start)
+	wg.Wait()
+
+	intorecv, outofrecv := 0, 0
+	intosend, outofsend := 0, 0
+	intosched, outofsched := 0, 0
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+
+	var rerr error
+
+	for {
+		sawinto := intorecv >= numpingpongs && intosend >= numpingpongs
+		sawoutof := outofrecv >= numpingpongs && outofsend >= numpingpongs
+		if sawinto && sawoutof {
+			break
+		}
+		rec, err := switches.ReadRecord(ctx)
+		if err != nil {
+			rerr = err
+			break
+		}
+		sr, ok := rec.(*perf.SwitchCPUWideRecord)
+		if !ok {
+			t.Errorf("got %T, want *perf.SwitchCPUWideRecord", rec)
+		}
+		switch {
+		case sr.Pid == 0:
+			if sr.Out() {
+				outofsched++
+			} else {
+				intosched++
+			}
+		case int(sr.Tid) == recvtid:
+			if sr.Out() {
+				outofrecv++
+			} else {
+				intorecv++
+			}
+		case int(sr.Tid) == sendtid:
+			if sr.Out() {
+				outofsend++
+			} else {
+				intosend++
+			}
+		}
+	}
+
+	if rerr != nil {
+		t.Fatal(err)
+	}
+
+	t.Logf("%d ping-pongs", numpingpongs)
+	t.Logf("recv switches: %d in, %d out", intorecv, outofrecv)
+	t.Logf("send switches: %d in, %d out", intosend, outofsend)
+	t.Logf("scheduler switches: %d in, %d out", intosched, outofsched)
 }
 
 func testSampleGetpid(t *testing.T) {
