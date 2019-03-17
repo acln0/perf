@@ -6,14 +6,19 @@ package perf_test
 
 import (
 	"context"
+	"os"
+	"os/exec"
 	"runtime"
 	"testing"
 	"time"
+	"unsafe"
 
 	"acln.ro/perf"
 
 	"golang.org/x/sys/unix"
 )
+
+// TODO(acln): the paranoid requirement is not specified for these tests
 
 func TestRecord(t *testing.T) {
 	t.Run("RingPoll", testRingPoll)
@@ -21,17 +26,18 @@ func TestRecord(t *testing.T) {
 	t.Run("SampleTracepointPidConcurrent", testSampleTracepointPidConcurrent)
 	t.Run("SampleTracepointStack", testSampleTracepointStack)
 	t.Run("RedirectManualWire", testRedirectManualWire)
-	t.Run("Refresh", testRefresh)
 }
 
 func testRingPoll(t *testing.T) {
 	t.Run("Timeout", testPollTimeout)
 	t.Run("Cancel", testPollCancel)
 	t.Run("Expired", testPollExpired)
+	t.Run("DisabledExit", testPollDisabledProcessExit)
+	t.Run("DisabledRefresh", testPollDisabledRefresh)
 }
 
 func testPollTimeout(t *testing.T) {
-	requires(t, tracepointPMU, debugfs) // TODO(acln): paranoid
+	requires(t, tracepointPMU, debugfs)
 
 	ga := new(perf.Attr)
 	ga.SetSamplePeriod(1)
@@ -98,7 +104,7 @@ func testPollTimeout(t *testing.T) {
 }
 
 func testPollCancel(t *testing.T) {
-	requires(t, tracepointPMU, debugfs) // TODO(acln): paranoid
+	requires(t, tracepointPMU, debugfs)
 
 	ga := new(perf.Attr)
 	ga.SetSamplePeriod(1)
@@ -166,7 +172,7 @@ func testPollCancel(t *testing.T) {
 }
 
 func testPollExpired(t *testing.T) {
-	requires(t, softwarePMU) // TODO(acln): paranoid
+	requires(t, softwarePMU)
 
 	da := new(perf.Attr)
 	perf.Dummy.Configure(da)
@@ -199,8 +205,216 @@ func testPollExpired(t *testing.T) {
 	}
 }
 
+const errDisabledTestEnv = "PERF_TEST_ERR_DISABLED"
+
+func init() {
+	// In child process of testErrDisabledProcessExist.
+	errDisabledTest := os.Getenv(errDisabledTestEnv)
+	if errDisabledTest != "1" {
+		return
+	}
+
+	// Signal to the parent that we can start.
+	evsig(3)
+
+	// Wait for the parent to tell us that they have set up performance
+	// monitoring, and are ready to observe the event.
+	evwait(4)
+
+	// Call getpid, then exit. Parent will see POLLIN for getpid, then
+	// POLLHUP because we exited.
+	unix.Getpid()
+	os.Exit(0)
+}
+
+func testPollDisabledProcessExit(t *testing.T) {
+	requires(t, tracepointPMU, debugfs)
+
+	// Re-exec ourselves with PERF_TEST_ERR_DISABLED=1.
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	readyev, err := unix.Eventfd(0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	startev, err := unix.Eventfd(0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(self)
+	cmd.Env = append(os.Environ(), errDisabledTestEnv+"=1")
+	cmd.ExtraFiles = []*os.File{
+		os.NewFile(uintptr(readyev), "readyevfd"),
+		os.NewFile(uintptr(startev), "startevfd"),
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Set up performance monitoring for the child process.
+	ga := &perf.Attr{
+		Options: perf.Options{
+			Disabled: true,
+		},
+		SampleFormat: perf.SampleFormat{
+			Tid: true,
+		},
+	}
+	ga.SetSamplePeriod(1)
+	ga.SetWakeupEvents(1)
+	gtp := perf.Tracepoint("syscalls", "sys_enter_getpid")
+	if err := gtp.Configure(ga); err != nil {
+		t.Fatal(err)
+	}
+
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	getpid, err := perf.Open(ga, cmd.Process.Pid, perf.AnyCPU, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer getpid.Close()
+	if err := getpid.MapRing(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Wait for the child process to be ready.
+	evwait(readyev)
+
+	// Now that it is, enable the event.
+	if err := getpid.Enable(); err != nil {
+		t.Fatal(err)
+	}
+
+	var rec1, rec2 perf.Record
+	var err1, err2 error
+	done := make(chan struct{})
+
+	go func() {
+		timeout := 100 * time.Millisecond
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		// Read two records. The first one should be valid,
+		// the second one should not, and the second error
+		// should be ErrDisabled.
+		rec1, err1 = getpid.ReadRecord(ctx)
+		rec2, err2 = getpid.ReadRecord(ctx)
+		close(done)
+	}()
+
+	// Signal to the child that it should call getpid now.
+	evsig(startev)
+
+	<-done
+	if err1 != nil {
+		t.Errorf("first error was %v, want nil", err1)
+	}
+	sr, ok := rec1.(*perf.SampleRecord)
+	if !ok {
+		t.Errorf("first record: got %T, want a SampleRecord", rec1)
+	}
+	if int(sr.Pid) != cmd.Process.Pid {
+		t.Errorf("first record: got pid %d in the sample, want %d",
+			sr.Pid, cmd.Process.Pid)
+	}
+	if err2 != perf.ErrDisabled {
+		t.Errorf("second record: error was %v, want ErrDisabled", err2)
+	}
+	if rec2 != nil {
+		t.Errorf("second record: got %#v, want nil", rec2)
+	}
+	if err := cmd.Wait(); err != nil {
+		t.Errorf("wait: %v", err)
+	}
+}
+
+func evsig(fd int) {
+	val := uint64(1)
+	buf := (*[8]byte)(unsafe.Pointer(&val))[:]
+	unix.Write(fd, buf)
+}
+
+func evwait(fd int) {
+	var val uint64
+	buf := (*[8]byte)(unsafe.Pointer(&val))[:]
+	unix.Read(fd, buf)
+}
+
+func testPollDisabledRefresh(t *testing.T) {
+	t.Skip("TODO(acln): investigate POLLHUP and IOC_REFRESH")
+
+	requires(t, tracepointPMU, debugfs)
+
+	ga := &perf.Attr{
+		SampleFormat: perf.SampleFormat{
+			Tid: true,
+		},
+		Options: perf.Options{
+			Disabled: true,
+		},
+	}
+	ga.SetSamplePeriod(1)
+	ga.SetWakeupEvents(1)
+	gtp := perf.Tracepoint("syscalls", "sys_enter_getpid")
+	if err := gtp.Configure(ga); err != nil {
+		t.Fatal(err)
+	}
+
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	getpid, err := perf.Open(ga, perf.CallingThread, perf.AnyCPU, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer getpid.Close()
+	if err := getpid.MapRing(); err != nil {
+		t.Fatal(err)
+	}
+
+	const n = 5
+
+	var (
+		records []perf.Record
+		errs    []error
+	)
+
+	done := make(chan struct{})
+
+	if err := getpid.Enable(); err != nil {
+		t.Fatal(err)
+	}
+
+	go func() {
+		for i := 0; i < n+1; i++ {
+			rec, err := getpid.ReadRecord(context.Background())
+			records = append(records, rec)
+			errs = append(errs, err)
+		}
+		close(done)
+	}()
+
+	if err := getpid.Refresh(4); err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 0; i < n; i++ {
+		getpidTrigger()
+	}
+
+	<-done
+
+	t.Log(errs)
+}
+
 func testSampleTracepointPid(t *testing.T) {
-	requires(t, tracepointPMU, debugfs) // TODO(acln): paranoid
+	requires(t, tracepointPMU, debugfs)
 
 	ga := &perf.Attr{
 		SampleFormat: perf.SampleFormat{
@@ -251,7 +465,7 @@ func testSampleTracepointPid(t *testing.T) {
 }
 
 func testSampleTracepointPidConcurrent(t *testing.T) {
-	requires(t, tracepointPMU, debugfs) // TODO(acln): paranoid
+	requires(t, tracepointPMU, debugfs)
 
 	ga := &perf.Attr{
 		SampleFormat: perf.SampleFormat{
@@ -316,7 +530,7 @@ func testSampleTracepointPidConcurrent(t *testing.T) {
 }
 
 func testSampleTracepointStack(t *testing.T) {
-	requires(t, tracepointPMU, debugfs) // TODO(acln): paranoid
+	requires(t, tracepointPMU, debugfs)
 
 	ga := &perf.Attr{
 		Options: perf.Options{
@@ -413,7 +627,7 @@ func testSampleTracepointStack(t *testing.T) {
 }
 
 func testRedirectManualWire(t *testing.T) {
-	requires(t, tracepointPMU, debugfs) // TODO(acln): paranoid
+	requires(t, tracepointPMU, debugfs)
 
 	ga := &perf.Attr{
 		SampleFormat: perf.SampleFormat{
@@ -509,71 +723,4 @@ func testRedirectManualWire(t *testing.T) {
 			}
 		}
 	}
-}
-
-func testRefresh(t *testing.T) {
-	t.Skip("TODO(acln): investigate POLLHUP and IOC_REFRESH")
-
-	requires(t, tracepointPMU, debugfs)
-
-	ga := &perf.Attr{
-		SampleFormat: perf.SampleFormat{
-			Tid: true,
-		},
-		Options: perf.Options{
-			Disabled: true,
-		},
-	}
-	ga.SetSamplePeriod(1)
-	ga.SetWakeupEvents(1)
-	gtp := perf.Tracepoint("syscalls", "sys_enter_getpid")
-	if err := gtp.Configure(ga); err != nil {
-		t.Fatal(err)
-	}
-
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-
-	getpid, err := perf.Open(ga, perf.CallingThread, perf.AnyCPU, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer getpid.Close()
-	if err := getpid.MapRing(); err != nil {
-		t.Fatal(err)
-	}
-
-	const n = 5
-
-	var (
-		records []perf.Record
-		errs    []error
-	)
-
-	done := make(chan struct{})
-
-	if err := getpid.Enable(); err != nil {
-		t.Fatal(err)
-	}
-
-	go func() {
-		for i := 0; i < n+1; i++ {
-			rec, err := getpid.ReadRecord(context.Background())
-			records = append(records, rec)
-			errs = append(errs, err)
-		}
-		close(done)
-	}()
-
-	if err := getpid.Refresh(4); err != nil {
-		t.Fatal(err)
-	}
-
-	for i := 0; i < n; i++ {
-		getpidTrigger()
-	}
-
-	<-done
-
-	t.Log(errs)
 }
