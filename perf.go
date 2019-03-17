@@ -297,14 +297,18 @@ func (ev *Event) Enable() error {
 	return wrapIoctlError("PERF_EVENT_IOC_ENABLE", err)
 }
 
-// Disable disables the event.
+// Disable disables the event. If ev is a group leader, Disable disables
+// all events in the group.
 func (ev *Event) Disable() error {
 	if err := ev.ok(); err != nil {
 		return err
 	}
-	err := ev.ioctlNoArg(unix.PERF_EVENT_IOC_DISABLE)
+	err := ev.ioctlInt(unix.PERF_EVENT_IOC_DISABLE, 0)
 	return wrapIoctlError("PERF_EVENT_IOC_DISABLE", err)
 }
+
+// TODO(acln): add support for PERF_IOC_FLAG_GROUP and for event followers
+// to disable the entire group?
 
 // Refresh adds delta to a counter associated with the event. This counter
 // decrements every time the event overflows. Once the counter reaches zero,

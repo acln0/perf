@@ -17,8 +17,8 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// ErrDisabled is returned from ReadRecord or ReadRawRecord if the event
-// being monitored is attached to a different process and that process
+// ErrDisabled is returned from ReadRecord and ReadRawRecord if the event
+// being monitored is attached to a different process, and that process
 // exits. (since Linux 3.18)
 var ErrDisabled = errors.New("perf: event disabled")
 
@@ -338,9 +338,10 @@ type SampleFormat struct {
 	// also Attr.SampleRegistersIntr.
 	IntrRegisters bool
 
-	// TODO(acln): find documentation
 	PhysicalAddress bool
 }
+
+// TODO(acln): document SampleFormat.PhysicalAddress
 
 // marshal packs the SampleFormat into a uint64.
 func (sf SampleFormat) marshal() uint64 {
@@ -440,8 +441,6 @@ type CPUMode uint8
 const cpuModeMask = 7
 
 // Known CPU modes.
-//
-// TODO(acln): add to x/sys/unix?
 const (
 	UnknownMode CPUMode = iota
 	KernelMode
@@ -505,7 +504,7 @@ func newRecord(ev *Event, rt RecordType) (Record, error) {
 }
 
 // mmapDataBit is PERF_RECORD_MISC_MMAP_DATA
-const mmapDataBit = 1 << 13 // TODO(acln): add to x/sys/unix?
+const mmapDataBit = 1 << 13
 
 // MmapRecord (PERF_RECORD_MMAP) records PROT_EXEC mappings such that
 // user-space IPs can be correlated to code.
@@ -571,7 +570,7 @@ func (cr *CommRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 }
 
 // commExecBit is PERF_RECORD_MISC_COMM_EXEC
-const commExecBit = 1 << 13 // TODO(acln): add to x/sys/unix?
+const commExecBit = 1 << 13
 
 // WasExec returns a boolean indicating whether a process name change
 // was caused by an exec(2) system call.
@@ -642,7 +641,7 @@ type ForkRecord struct {
 	Ppid uint32 // parent process ID
 	Tid  uint32 // thread ID
 	Ptid uint32 // parent thread ID
-	Time uint64 // time when the fork occurred (TODO: is that true?)
+	Time uint64 // time when the fork occurred
 	SampleID
 }
 
@@ -814,7 +813,7 @@ func (sr *SampleRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 }
 
 // exactIPBit is PERF_RECORD_MISC_EXACT_IP
-const exactIPBit = 1 << 14 // TODO(acln): add to x/sys/unix?
+const exactIPBit = 1 << 14
 
 // ExactIP indicates that sr.IP points to the actual instruction that
 // triggered the event. See also Options.PreciseIP.
@@ -978,7 +977,6 @@ func (be *BranchEntry) decode(from, to, entry uint64) {
 
 type BranchType uint8
 
-// TODO(acln): add to x/sys/unix?
 const (
 	BranchTypeUnknown BranchType = iota
 	BranchTypeConditional
@@ -1048,8 +1046,6 @@ type AuxRecord struct {
 type AuxFlag uint64
 
 // AuxFlag bits.
-//
-// TODO(acln): add to x/sys/unix?
 const (
 	AuxTruncated AuxFlag = 0x01 // record was truncated to fit
 	AuxOverwrite AuxFlag = 0x02 // snapshot from overwrite mode
@@ -1115,10 +1111,10 @@ func (sr *SwitchRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 }
 
 // switchOutBit is PERF_RECORD_MISC_SWITCH_OUT
-const switchOutBit = 1 << 13 // TODO(acln): add to x/sys/unix?
+const switchOutBit = 1 << 13
 
 // switchOutPreemptBit is PERF_RECORD_MISC_SWITCH_OUT_PREEMPT
-const switchOutPreemptBit = 1 << 14 // TODO(acln): add to x/sys/unix?
+const switchOutPreemptBit = 1 << 14
 
 // Out returns a boolean indicating whether the context switch was
 // out of the current process, or into the current process.
@@ -1159,9 +1155,8 @@ func (sr *SwitchCPUWideRecord) Preempted() bool {
 	return sr.RecordHeader.Misc&switchOutPreemptBit != 0
 }
 
-// NamespacesRecord (PERF_RECORD_NAMESPACES) is not documented in my man page.
-//
-// TODO(acln): ^
+// NamespacesRecord (PERF_RECORD_NAMESPACES) describes the namespaces of a
+// process when it is created.
 type NamespacesRecord struct {
 	RecordHeader
 	Pid        uint32
@@ -1172,6 +1167,8 @@ type NamespacesRecord struct {
 	}
 	SampleID
 }
+
+// TODO(acln): check out *_NS_INDEX in perf_event.h
 
 func (nr *NamespacesRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	nr.RecordHeader = raw.Header
@@ -1289,8 +1286,6 @@ func (ds DataSource) MemTLB() MemTLB {
 type MemOp uint8
 
 // MemOp flag bits.
-//
-// TODO(acln): add the corresponding values to x/sys/unix?
 const (
 	MemOpNA MemOp = 1 << iota
 	MemOpLoad
@@ -1305,8 +1300,6 @@ const (
 type MemLevel uint32
 
 // MemLevel flag bits.
-//
-// TODO(acln): add the corresponding values to x/sys/unix?
 const (
 	MemLevelNA MemLevel = 1 << iota
 	MemLevelHit
@@ -1330,8 +1323,6 @@ const (
 type MemRemote uint8
 
 // MemRemote flag bits.
-//
-// TODO(acln): add the corresponding values to x/sys/unix?
 const (
 	MemRemoteRemote MemRemote = 1 << iota
 
@@ -1342,8 +1333,6 @@ const (
 type MemLevelNumber uint8
 
 // MemLevelNumber flag bits.
-//
-// TODO(acln): add the corresponding values to x/sys/unix?
 const (
 	MemLevelNumberL1 MemLevelNumber = iota
 	MemLevelNumberL2
@@ -1363,8 +1352,6 @@ const (
 type MemSnoopMode uint8
 
 // MemSnoopMode flag bits.
-//
-// TODO(acln): add the corresponding values to x/sys/unix?
 const (
 	MemSnoopModeNA MemSnoopMode = 1 << iota
 	MemSnoopModeNone
@@ -1379,8 +1366,6 @@ const (
 type MemSnoopModeX uint8
 
 // MemSnoopModeX flag bits.
-//
-// TODO(acln): add the corresponding values to x/sys/unix?
 const (
 	MemSnoopModeXForward MemSnoopModeX = 0x01 // forward
 
@@ -1391,8 +1376,6 @@ const (
 type MemLock uint8
 
 // MemLock flag bits.
-//
-// TODO(acln): add the corresponding values to x/sys/unix?
 const (
 	MemLockNA     MemLock = 1 << iota // not available
 	MemLockLocked                     // locked transaction
@@ -1404,8 +1387,6 @@ const (
 type MemTLB uint8
 
 // MemTLB flag bits.
-//
-// TODO(acln): add the corresponding values to x/sys/unix?
 const (
 	MemTLBNA   MemTLB = 1 << iota // not available
 	MemTLBHit                     // hit level
@@ -1422,8 +1403,6 @@ const (
 type Transaction uint64
 
 // Transaction bits: values should be &-ed with Transaction values.
-//
-// TODO(acln): add the corresponding values to x/sys/unix?
 const (
 	// Transaction Elision indicates an abort from an elision type
 	// transaction (Intel CPU specific).
@@ -1458,13 +1437,17 @@ const (
 )
 
 // txnAbortMask is PERF_TXN_ABORT_MASK
-const txnAbortMask = 0xffffffff // TODO(acln): add to x/sys/unix?
+const txnAbortMask = 0xffffffff
 
 // txnAbortShift is PERF_TXN_ABORT_SHIFT
-const txnAbortShift = 32 // TODO(acln): add to x/sys/unix?
+const txnAbortShift = 32
 
 // UserAbortCode returns the user-specified abort code associated with
 // the transaction.
 func (txn Transaction) UserAbortCode() uint32 {
 	return uint32((txn >> txnAbortShift) & txnAbortMask)
 }
+
+// TODO(acln): the latter part of this file is full of constants added
+// ad-hoc, which use iota. These should probably be added to x/sys/unix
+// instead, and used from there.

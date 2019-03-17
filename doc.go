@@ -75,5 +75,8 @@ Tracepoints are also supported:
 	fmt.Printf("pid = %d, tid = %d\n", sr.Pid, sr.Tid)
 
 For more detailed information, see the examples, and man 2 perf_event_open.
+
+NOTE: this package is experimental and does not yet offer compatibility
+guarantees.
 */
 package perf
