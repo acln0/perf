@@ -93,11 +93,6 @@ type Event struct {
 	pollresp chan pollresp
 }
 
-// numRingPages is the number of pages we map for the ring buffer (excluding
-// the meta page). This is the value the perf tool seems to use, at least
-// on systems with 4KiB pages. There is no other theory behind this number.
-const numRingPages = 128
-
 // Open opens the event configured by attr.
 //
 // The pid and cpu parameters specify which thread and CPU to monitor:
@@ -185,10 +180,23 @@ func open(a *Attr, pid, cpu int, group *Event, flags int) (*Event, error) {
 	return ev, nil
 }
 
+// DefaultNumPages is the number of pages used by MapRing. There is no
+// fundamental logic to this number. We use it because that is what the perf
+// tool does.
+const DefaultNumPages = 128
+
 // MapRing maps the ring buffer attached to the event into memory.
 //
 // This enables reading records via ReadRecord / ReadRawRecord.
 func (ev *Event) MapRing() error {
+	return ev.MapRingNumPages(DefaultNumPages)
+}
+
+// MapRingNumPages is like MapRing, but allows the caller to The size of
+// the data portion of the ring is num pages. The total size of the ring
+// is num+1 pages, because an additional metadata page is mapped before the
+// data portion of the ring.
+func (ev *Event) MapRingNumPages(num int) error {
 	if err := ev.ok(); err != nil {
 		return err
 	}
@@ -196,7 +204,7 @@ func (ev *Event) MapRing() error {
 		return nil
 	}
 
-	size := (1 + numRingPages) * unix.Getpagesize()
+	size := (1 + num) * unix.Getpagesize()
 	const prot = unix.PROT_READ | unix.PROT_WRITE
 	const flags = unix.MAP_SHARED
 	ring, err := unix.Mmap(ev.perffd, 0, size, prot, flags)
@@ -1175,7 +1183,7 @@ func (opt Options) marshal() uint64 {
 // file, which is the canonical method for determining if a kernel supports
 // perf_event_open(2).
 func Supported() bool {
-	_, err := os.Stat("")
+	_, err := os.Stat("/proc/sys/kernel/perf_event_paranoid")
 	return err == nil
 }
 
