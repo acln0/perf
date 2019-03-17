@@ -6,6 +6,7 @@ package perf_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"runtime"
@@ -20,15 +21,17 @@ import (
 
 // TODO(acln): the paranoid requirement is not specified for these tests
 
-func TestRecord(t *testing.T) {
-	t.Run("RingPoll", testRingPoll)
+func TestReadRecord(t *testing.T) {
+	t.Run("Poll", testPoll)
+	t.Run("Comm", testComm)
+	t.Run("Exit", testExit)
 	t.Run("SampleGetpid", testSampleGetpid)
 	t.Run("SampleGetpidConcurrent", testSampleGetpidConcurrent)
 	t.Run("SampleTracepointStack", testSampleTracepointStack)
 	t.Run("RedirectManualWire", testRedirectManualWire)
 }
 
-func testRingPoll(t *testing.T) {
+func testPoll(t *testing.T) {
 	t.Run("Timeout", testPollTimeout)
 	t.Run("Cancel", testPollCancel)
 	t.Run("Expired", testPollExpired)
@@ -205,26 +208,28 @@ func testPollExpired(t *testing.T) {
 }
 
 func testPollDisabled(t *testing.T) {
-	t.Run("ByExit", testPollDisabledByExit)
 	t.Run("Explicitly", testPollDisabledExplicitly)
 	t.Run("ByRefresh", testPollDisabledByRefresh)
+	t.Run("ByExit", testPollDisabledByExit)
 }
 
 const errDisabledTestEnv = "PERF_TEST_ERR_DISABLED"
 
 func init() {
 	// In child process of testErrDisabledProcessExist.
-	errDisabledTest := os.Getenv(errDisabledTestEnv)
-	if errDisabledTest != "1" {
+	if os.Getenv(errDisabledTestEnv) != "1" {
 		return
 	}
 
+	readyevfd := 3
+	startevfd := 4
+
 	// Signal to the parent that we can start.
-	evsig(3)
+	evsig(readyevfd)
 
 	// Wait for the parent to tell us that they have set up performance
 	// monitoring, and are ready to observe the event.
-	evwait(4)
+	evwait(startevfd)
 
 	// Call getpid, then exit. Parent will see POLLIN for getpid, then
 	// POLLHUP because we exited.
@@ -241,21 +246,23 @@ func testPollDisabledByExit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	readyev, err := unix.Eventfd(0, 0)
+	readyevfd, err := unix.Eventfd(0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer unix.Close(readyevfd)
 
-	startev, err := unix.Eventfd(0, 0)
+	startevfd, err := unix.Eventfd(0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer unix.Close(startevfd)
 
 	cmd := exec.Command(self)
 	cmd.Env = append(os.Environ(), errDisabledTestEnv+"=1")
 	cmd.ExtraFiles = []*os.File{
-		os.NewFile(uintptr(readyev), "readyevfd"),
-		os.NewFile(uintptr(startev), "startevfd"),
+		os.NewFile(uintptr(readyevfd), "readyevfd"),
+		os.NewFile(uintptr(startevfd), "startevfd"),
 	}
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
@@ -290,7 +297,7 @@ func testPollDisabledByExit(t *testing.T) {
 	}
 
 	// Wait for the child process to be ready.
-	evwait(readyev)
+	evwait(readyevfd)
 
 	// Now that it is, enable the event.
 	if err := getpid.Enable(); err != nil {
@@ -314,7 +321,7 @@ func testPollDisabledByExit(t *testing.T) {
 	}()
 
 	// Signal to the child that it should call getpid now.
-	evsig(startev)
+	evsig(startevfd)
 
 	<-done
 	if err1 != nil {
@@ -322,7 +329,7 @@ func testPollDisabledByExit(t *testing.T) {
 	}
 	sr, ok := rec1.(*perf.SampleRecord)
 	if !ok {
-		t.Errorf("first record: got %T, want a SampleRecord", rec1)
+		t.Errorf("first record: got %T, want SampleRecord", rec1)
 	}
 	if int(sr.Pid) != cmd.Process.Pid {
 		t.Errorf("first record: got pid %d in the sample, want %d",
@@ -335,20 +342,8 @@ func testPollDisabledByExit(t *testing.T) {
 		t.Errorf("second record: got %#v, want nil", rec2)
 	}
 	if err := cmd.Wait(); err != nil {
-		t.Errorf("wait: %v", err)
+		t.Fatal(err)
 	}
-}
-
-func evsig(fd int) {
-	val := uint64(1)
-	buf := (*[8]byte)(unsafe.Pointer(&val))[:]
-	unix.Write(fd, buf)
-}
-
-func evwait(fd int) {
-	var val uint64
-	buf := (*[8]byte)(unsafe.Pointer(&val))[:]
-	unix.Read(fd, buf)
 }
 
 func testPollDisabledExplicitly(t *testing.T) {
@@ -499,6 +494,291 @@ func testPollDisabledByRefresh(t *testing.T) {
 	if seen != n {
 		t.Fatalf("saw %d events, want %d", seen, n)
 	}
+}
+
+const (
+	commTestEnv  = "PERF_TEST_COMM"
+	commTestName = "commtest"
+)
+
+func init() {
+	// In child process of testComm.
+	if os.Getenv(commTestEnv) != "1" {
+		return
+	}
+
+	readyevfd := 3
+	startevfd := 4
+	sawcommevfd := 5
+
+	// Signal to the parent that we can start.
+	evsig(readyevfd)
+
+	// Wait for the parent to tell us that they have set up performance
+	// monitoring, and are ready to observe the event.
+	evwait(startevfd)
+
+	// Change our name.
+	b := make([]byte, len(commTestName)+1)
+	copy(b, commTestName)
+	err := unix.Prctl(unix.PR_SET_NAME, uintptr(unsafe.Pointer(&b[0])), 0, 0, 0)
+	runtime.KeepAlive(&b[0])
+	if err != nil {
+		fmt.Fprint(os.Stderr, err)
+		os.Exit(2)
+	}
+
+	// TODO(acln): investigate the legitimacy of the following crutch.
+	//
+	// Wait for the parent to see that we changed our name, then exit.
+	//
+	// If we do not wait here, there is a terrible race condition waiting
+	// to happen: If we PR_SET_NAME in the child, then immediately exit,
+	// the other side may not see POLLIN on the comm record: it may see
+	// POLLHUP directly, even though a comm record was actually written
+	// to the ring in the meantime. Why we get POLLHUP directly, and not
+	// POLLIN before it, is unclear. The machinery to deal with this
+	// eventuality in the poller does not exist yet, and at the time
+	// when this comment was written, I have found no good solutions to
+	// this conundrum.
+	//
+	// So we live with it, but still try to make our test pass.
+	evwait(sawcommevfd)
+	os.Exit(0)
+}
+
+func testComm(t *testing.T) {
+	requires(t, softwarePMU)
+
+	// Re-exec ourselves with PERF_TEST_COMM=1.
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	readyevfd, err := unix.Eventfd(0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unix.Close(readyevfd)
+
+	startevfd, err := unix.Eventfd(0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unix.Close(startevfd)
+
+	sawcommevfd, err := unix.Eventfd(0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unix.Close(sawcommevfd)
+
+	cmd := exec.Command(self)
+	cmd.Env = append(os.Environ(), commTestEnv+"=1")
+	cmd.ExtraFiles = []*os.File{
+		os.NewFile(uintptr(readyevfd), "readyevfd"),
+		os.NewFile(uintptr(startevfd), "startevfd"),
+		os.NewFile(uintptr(sawcommevfd), "sawcommevfd"),
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Set up performance monitoring for the child process.
+	ca := &perf.Attr{
+		Options: perf.Options{
+			Disabled: true,
+			Comm:     true,
+		},
+		SampleFormat: perf.SampleFormat{
+			Tid: true,
+		},
+	}
+	ca.SetSamplePeriod(1)
+	ca.SetWakeupEvents(1)
+	perf.Dummy.Configure(ca)
+
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	comm, err := perf.Open(ca, cmd.Process.Pid, perf.AnyCPU, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer comm.Close()
+	if err := comm.MapRing(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Wait for the child process to be ready.
+	evwait(readyevfd)
+
+	// Now that it is, enable the event.
+	if err := comm.Enable(); err != nil {
+		t.Fatal(err)
+	}
+
+	var rec perf.Record
+	var rerr error
+	done := make(chan struct{})
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+		defer cancel()
+		rec, rerr = comm.ReadRecord(ctx)
+		close(done)
+	}()
+
+	// Signal to the child that it should change its name now.
+	evsig(startevfd)
+
+	// Observe the CommRecord.
+	<-done
+
+	// Tell the child that it's safe to exit now.
+	evsig(sawcommevfd)
+	if err := cmd.Wait(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Observe the CommRecord.
+	if rerr != nil {
+		t.Fatalf("got %v, want valid record", rerr)
+	}
+	cr, ok := rec.(*perf.CommRecord)
+	if !ok {
+		t.Fatalf("got %T, want CommRecord", rec)
+	}
+	if int(cr.Pid) != cmd.Process.Pid {
+		t.Errorf("got pid %d, want %d", cr.Pid, cmd.Process.Pid)
+	}
+	if cr.NewName != commTestName {
+		t.Errorf("new name = %q, want %q", cr.NewName, commTestName)
+	}
+}
+
+const (
+	exitTestEnv  = "PERF_TEST_EXIT"
+	exitTestCode = 42
+)
+
+func init() {
+	// In the child process of testExit.
+	if os.Getenv("PERF_TEST_EXIT") != "1" {
+		return
+	}
+
+	readyevfd := 3
+	startevfd := 4
+
+	// Signal to the parent that we can start.
+	evsig(readyevfd)
+
+	// Wait for the parent to tell us that they have set up performance
+	// monitoring, and are ready to observe the event.
+	evwait(startevfd)
+
+	os.Exit(exitTestCode)
+}
+
+func testExit(t *testing.T) {
+	requires(t, softwarePMU)
+
+	// Re-exec ourselves with PERF_TEST_EXIT=1.
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	readyevfd, err := unix.Eventfd(0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unix.Close(readyevfd)
+
+	startevfd, err := unix.Eventfd(0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unix.Close(startevfd)
+
+	cmd := exec.Command(self)
+	cmd.Env = append(os.Environ(), exitTestEnv+"=1")
+	cmd.ExtraFiles = []*os.File{
+		os.NewFile(uintptr(readyevfd), "readyevfd"),
+		os.NewFile(uintptr(startevfd), "startevfd"),
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	pid := cmd.Process.Pid
+
+	// Set up performance monitoring for the child process.
+	ca := &perf.Attr{
+		Options: perf.Options{
+			Disabled: true,
+			Task:     true,
+		},
+		SampleFormat: perf.SampleFormat{
+			Tid: true,
+		},
+	}
+	ca.SetSamplePeriod(1)
+	ca.SetWakeupEvents(1)
+	perf.Dummy.Configure(ca)
+
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	comm, err := perf.Open(ca, pid, perf.AnyCPU, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer comm.Close()
+	if err := comm.MapRing(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Wait for the child process to be ready.
+	evwait(readyevfd)
+
+	// Now that it is, enable the event.
+	if err := comm.Enable(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Signal to the child that it should exit now.
+	evsig(startevfd)
+
+	// Observe the exit code from os/exec first.
+	err = cmd.Wait()
+	if err == nil {
+		t.Fatal("child exited with code 0")
+	}
+	ee, ok := err.(*exec.ExitError)
+	if !ok {
+		t.Fatalf("got %T, want *exec.ExitError", err)
+	}
+	if got := ee.ExitCode(); got != exitTestCode {
+		t.Fatalf("got exit code %d, want %d", got, exitTestCode)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	rec, err := comm.ReadRecord(ctx)
+	if err != nil {
+		t.Fatalf("got %v, want valid record", err)
+	}
+	er, ok := rec.(*perf.ExitRecord)
+	if !ok {
+		t.Fatalf("got %T, want *ExitRecord", rec)
+	}
+	if int(er.Pid) != pid {
+		t.Errorf("got pid %d, want %d", er.Pid, pid)
+	}
+	// Unfortunately, no er.Ppid and er.Ptid test. The Go runtime
+	// interferes with us.
 }
 
 func testSampleGetpid(t *testing.T) {
@@ -811,4 +1091,18 @@ func testRedirectManualWire(t *testing.T) {
 			}
 		}
 	}
+}
+
+// Eventfd helper functions.
+
+func evsig(fd int) {
+	val := uint64(1)
+	buf := (*[8]byte)(unsafe.Pointer(&val))[:]
+	unix.Write(fd, buf)
+}
+
+func evwait(fd int) {
+	var val uint64
+	buf := (*[8]byte)(unsafe.Pointer(&val))[:]
+	unix.Read(fd, buf)
 }
