@@ -35,8 +35,8 @@ var ErrNoReadRecord = errors.New("perf: ReadRecord disabled")
 // Event method.
 //
 // If another event's records were routed to ev via SetOutput, and the
-// two events did not have identical SampleFormat and Options.SampleIDAll
-// settings, ReadRecord fails, and returns ErrNoReadRecord.
+// two events did not have compatible SampleFormat Options settings (see
+// SetOutput documentation), ReadRecord returns ErrNoReadRecord.
 func (ev *Event) ReadRecord(ctx context.Context) (Record, error) {
 	if err := ev.ok(); err != nil {
 		return nil, err

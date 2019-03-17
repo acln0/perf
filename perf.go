@@ -961,8 +961,6 @@ type BreakpointType uint32
 
 // Breakpoint types. Values are |-ed together. The combination of
 // BreakpointTypeR or BreakpointTypeW with BreakpointTypeX is invalid.
-//
-// TODO(acln): add these to x/sys/unix?
 const (
 	BreakpointTypeEmpty BreakpointType = 0x0
 	BreakpointTypeR     BreakpointType = 0x1
@@ -975,8 +973,6 @@ const (
 type BreakpointLength uint64
 
 // Breakpoint length values.
-//
-// TODO(acln): add these to x/sys/unix?
 const (
 	BreakpointLength1 BreakpointLength = 1
 	BreakpointLength2 BreakpointLength = 2
@@ -985,7 +981,6 @@ const (
 )
 
 // ExecutionBreakpointLength returns the length of an execution breakpoint.
-//
 func ExecutionBreakpointLength() BreakpointLength {
 	// TODO(acln): is this correct? The man page says to set this to
 	// sizeof(long). Is sizeof(C long) == sizeof(Go uintptr) on all
@@ -1175,14 +1170,12 @@ func (opt Options) marshal() uint64 {
 // Supported returns a boolean indicating whether the host kernel supports
 // the perf_event_open system call, which is a prerequisite for the operations
 // of this package.
+//
+// Supported checks for the existence of a /proc/sys/kernel/perf_event_paranoid
+// file, which is the canonical method for determining if a kernel supports
+// perf_event_open(2).
 func Supported() bool {
-	// The man page says:
-	//
-	// "The existence of the perf_event_paranoid file is the official
-	// method for determining if a kernel supports perf_event_open()."
-	//
-	// so this is what we do.
-	_, err := os.Stat("/proc/sys/kernel/perf_event_paranoid")
+	_, err := os.Stat("")
 	return err == nil
 }
 
