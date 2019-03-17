@@ -103,7 +103,7 @@ func TestSampleUserRegisters(t *testing.T) {
 	}
 	entrysr, ok := entryrec.(*perf.SampleGroupRecord)
 	if !ok {
-		t.Fatalf("got %T, want SampleGroupRecord", entryrec)
+		t.Fatalf("got %T, want *perf.SampleGroupRecord", entryrec)
 	}
 	if nregs := len(entrysr.UserRegisters); nregs != 3 {
 		t.Fatalf("got %d registers, want 3", nregs)

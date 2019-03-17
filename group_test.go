@@ -130,7 +130,7 @@ func testGroupRecord(t *testing.T) {
 	}
 	gsr, ok := grec.(*perf.SampleGroupRecord)
 	if !ok {
-		t.Fatalf("got %T, want SampleGroupRecord", grec)
+		t.Fatalf("got %T, want *perf.SampleGroupRecord", grec)
 	}
 
 	wrec, err := ev.ReadRecord(ctx)
@@ -139,7 +139,7 @@ func testGroupRecord(t *testing.T) {
 	}
 	wsr, ok := wrec.(*perf.SampleGroupRecord)
 	if !ok {
-		t.Fatalf("got %T, want SampleGroupRecord", wrec)
+		t.Fatalf("got %T, want *perf.SampleGroupRecord", wrec)
 	}
 
 	if gip, wip := gsr.IP, wsr.IP; gip == wip {

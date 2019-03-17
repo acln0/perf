@@ -329,7 +329,7 @@ func testPollDisabledByExit(t *testing.T) {
 	}
 	sr, ok := rec1.(*perf.SampleRecord)
 	if !ok {
-		t.Errorf("first record: got %T, want SampleRecord", rec1)
+		t.Errorf("first record: got %T, want *perf.SampleRecord", rec1)
 	}
 	if int(sr.Pid) != cmd.Process.Pid {
 		t.Errorf("first record: got pid %d in the sample, want %d",
@@ -648,13 +648,16 @@ func testComm(t *testing.T) {
 	}
 	cr, ok := rec.(*perf.CommRecord)
 	if !ok {
-		t.Fatalf("got %T, want CommRecord", rec)
+		t.Fatalf("got %T, want *perf.CommRecord", rec)
 	}
 	if int(cr.Pid) != cmd.Process.Pid {
 		t.Errorf("got pid %d, want %d", cr.Pid, cmd.Process.Pid)
 	}
 	if cr.NewName != commTestName {
 		t.Errorf("new name = %q, want %q", cr.NewName, commTestName)
+	}
+	if cr.WasExec() {
+		t.Error("got WasExec() == true, want false")
 	}
 }
 
@@ -772,7 +775,7 @@ func testExit(t *testing.T) {
 	}
 	er, ok := rec.(*perf.ExitRecord)
 	if !ok {
-		t.Fatalf("got %T, want *ExitRecord", rec)
+		t.Fatalf("got %T, want *perf.ExitRecord", rec)
 	}
 	if int(er.Pid) != pid {
 		t.Errorf("got pid %d, want %d", er.Pid, pid)
