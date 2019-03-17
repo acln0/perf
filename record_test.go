@@ -22,8 +22,8 @@ import (
 
 func TestRecord(t *testing.T) {
 	t.Run("RingPoll", testRingPoll)
-	t.Run("SampleTracepointPid", testSampleTracepointPid)
-	t.Run("SampleTracepointPidConcurrent", testSampleTracepointPidConcurrent)
+	t.Run("SampleGetpid", testSampleGetpid)
+	t.Run("SampleGetpidConcurrent", testSampleGetpidConcurrent)
 	t.Run("SampleTracepointStack", testSampleTracepointStack)
 	t.Run("RedirectManualWire", testRedirectManualWire)
 }
@@ -32,8 +32,7 @@ func testRingPoll(t *testing.T) {
 	t.Run("Timeout", testPollTimeout)
 	t.Run("Cancel", testPollCancel)
 	t.Run("Expired", testPollExpired)
-	t.Run("DisabledExit", testPollDisabledProcessExit)
-	t.Run("DisabledRefresh", testPollDisabledRefresh)
+	t.Run("Disabled", testPollDisabled)
 }
 
 func testPollTimeout(t *testing.T) {
@@ -205,6 +204,12 @@ func testPollExpired(t *testing.T) {
 	}
 }
 
+func testPollDisabled(t *testing.T) {
+	t.Run("ByExit", testPollDisabledByExit)
+	t.Run("Explicitly", testPollDisabledExplicitly)
+	t.Run("ByRefresh", testPollDisabledByRefresh)
+}
+
 const errDisabledTestEnv = "PERF_TEST_ERR_DISABLED"
 
 func init() {
@@ -227,7 +232,7 @@ func init() {
 	os.Exit(0)
 }
 
-func testPollDisabledProcessExit(t *testing.T) {
+func testPollDisabledByExit(t *testing.T) {
 	requires(t, tracepointPMU, debugfs)
 
 	// Re-exec ourselves with PERF_TEST_ERR_DISABLED=1.
@@ -346,9 +351,7 @@ func evwait(fd int) {
 	unix.Read(fd, buf)
 }
 
-func testPollDisabledRefresh(t *testing.T) {
-	t.Skip("TODO(acln): investigate POLLHUP and IOC_REFRESH")
-
+func testPollDisabledExplicitly(t *testing.T) {
 	requires(t, tracepointPMU, debugfs)
 
 	ga := &perf.Attr{
@@ -378,29 +381,25 @@ func testPollDisabledRefresh(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	const n = 5
+	const n = 3
 
-	var (
-		records []perf.Record
-		errs    []error
-	)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	done := make(chan struct{})
-
-	if err := getpid.Enable(); err != nil {
-		t.Fatal(err)
-	}
+	seen := 0
 
 	go func() {
-		for i := 0; i < n+1; i++ {
-			rec, err := getpid.ReadRecord(context.Background())
-			records = append(records, rec)
-			errs = append(errs, err)
+		for i := 0; i < 2*n; i++ {
+			_, err := getpid.ReadRecord(ctx)
+			if err == nil {
+				seen++
+			}
 		}
 		close(done)
 	}()
 
-	if err := getpid.Refresh(4); err != nil {
+	if err := getpid.Enable(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -408,12 +407,101 @@ func testPollDisabledRefresh(t *testing.T) {
 		getpidTrigger()
 	}
 
+	if err := getpid.Disable(); err != nil {
+		getpidTrigger()
+	}
+
+	for i := 0; i < n; i++ {
+		getpidTrigger()
+	}
+
+	cancel()
 	<-done
 
-	t.Log(errs)
+	if seen != n {
+		t.Fatalf("saw %d events, want %d", seen, n)
+	}
 }
 
-func testSampleTracepointPid(t *testing.T) {
+func testPollDisabledByRefresh(t *testing.T) {
+	// TODO(acln): investigate the following: the man page says that
+	// POLLHUP should be indicated on the file descriptor when the counter
+	// associated with a call to Refresh reaches zero.  I have not been
+	// able to observe this. When the counter reaches zero, the event
+	// is disabled (which is what this test shows), but POLLHUP doesn't
+	// seem to be indicated on the file descriptor.
+	//
+	// If we ever figure out how to observe a HUP there, we should
+	// make ReadRawRecord return ErrDisabled. In the meantime, leave
+	// things as-is.
+	requires(t, tracepointPMU, debugfs)
+
+	ga := &perf.Attr{
+		SampleFormat: perf.SampleFormat{
+			Tid: true,
+		},
+		Options: perf.Options{
+			Disabled: true,
+		},
+	}
+	ga.SetSamplePeriod(1)
+	ga.SetWakeupEvents(1)
+	gtp := perf.Tracepoint("syscalls", "sys_enter_getpid")
+	if err := gtp.Configure(ga); err != nil {
+		t.Fatal(err)
+	}
+
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	getpid, err := perf.Open(ga, perf.CallingThread, perf.AnyCPU, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer getpid.Close()
+	if err := getpid.MapRing(); err != nil {
+		t.Fatal(err)
+	}
+
+	const n = 3
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan struct{})
+	seen := 0
+
+	go func() {
+		for i := 0; i < 2*n; i++ {
+			_, err := getpid.ReadRecord(ctx)
+			if err == nil {
+				seen++
+			}
+		}
+		close(done)
+	}()
+
+	if err := getpid.Refresh(n); err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 0; i < n; i++ {
+		getpidTrigger()
+	}
+
+	for i := 0; i < n; i++ {
+		getpidTrigger()
+	}
+
+	cancel()
+	<-done
+
+	if seen != n {
+		t.Fatalf("saw %d events, want %d", seen, n)
+	}
+}
+
+func testSampleGetpid(t *testing.T) {
 	requires(t, tracepointPMU, debugfs)
 
 	ga := &perf.Attr{
@@ -464,7 +552,7 @@ func testSampleTracepointPid(t *testing.T) {
 	}
 }
 
-func testSampleTracepointPidConcurrent(t *testing.T) {
+func testSampleGetpidConcurrent(t *testing.T) {
 	requires(t, tracepointPMU, debugfs)
 
 	ga := &perf.Attr{

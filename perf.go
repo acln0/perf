@@ -308,9 +308,8 @@ func (ev *Event) Disable() error {
 
 // Refresh adds delta to a counter associated with the event. This counter
 // decrements every time the event overflows. Once the counter reaches zero,
-// the event is disabled and ErrDisabled is returned from ReadRecord or
-// ReadRawRecord. Calling Refresh with delta == 0 is considered undefined
-// behavior.
+// the event is disabled. Calling Refresh with delta == 0 is considered
+// undefined behavior.
 func (ev *Event) Refresh(delta int) error {
 	if err := ev.ok(); err != nil {
 		return err

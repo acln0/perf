@@ -17,11 +17,9 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// ErrDisabled is returned from ReadRecord or ReadRawRecord under the
-// following circumstances: if Refresh was called on the Event and the
-// associated counter has reached zero, or - starting with Linux 3.18 -
-// if the event being monitored is attached to a different process and that
-// process exits.
+// ErrDisabled is returned from ReadRecord or ReadRawRecord if the event
+// being monitored is attached to a different process and that process
+// exits. (since Linux 3.18)
 var ErrDisabled = errors.New("perf: event disabled")
 
 // ErrNoReadRecord is returned by ReadRecord when it is disabled on a
