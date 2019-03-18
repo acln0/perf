@@ -519,6 +519,7 @@ type MmapRecord struct {
 	SampleID
 }
 
+// DecodeFrom implements the Record.DecodeFrom method.
 func (mr *MmapRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	mr.RecordHeader = raw.Header
 	f := raw.fields()
@@ -544,6 +545,7 @@ type LostRecord struct {
 	SampleID
 }
 
+// DecodeFrom implements the Record.DecodeFrom method.
 func (lr *LostRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	lr.RecordHeader = raw.Header
 	f := raw.fields()
@@ -561,6 +563,7 @@ type CommRecord struct {
 	SampleID
 }
 
+// DecodeFrom implements the Record.DecodeFrom method.
 func (cr *CommRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	cr.RecordHeader = raw.Header
 	f := raw.fields()
@@ -589,6 +592,7 @@ type ExitRecord struct {
 	SampleID
 }
 
+// DecodeFrom implements the Record.DecodeFrom method.
 func (er *ExitRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	er.RecordHeader = raw.Header
 	f := raw.fields()
@@ -607,6 +611,7 @@ type ThrottleRecord struct {
 	SampleID
 }
 
+// DecodeFrom implements the Record.DecodeFrom method.
 func (tr *ThrottleRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	tr.RecordHeader = raw.Header
 	f := raw.fields()
@@ -625,6 +630,7 @@ type UnthrottleRecord struct {
 	SampleID
 }
 
+// DecodeFrom implements the Record.DecodeFrom method.
 func (ur *UnthrottleRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	ur.RecordHeader = raw.Header
 	f := raw.fields()
@@ -645,6 +651,7 @@ type ForkRecord struct {
 	SampleID
 }
 
+// DecodeFrom implements the Record.DecodeFrom method.
 func (fr *ForkRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	fr.RecordHeader = raw.Header
 	f := raw.fields()
@@ -663,6 +670,7 @@ type ReadRecord struct {
 	SampleID
 }
 
+// DecodeFrom implements the Record.DecodeFrom method.
 func (rr *ReadRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	rr.RecordHeader = raw.Header
 	f := raw.fields()
@@ -680,6 +688,7 @@ type ReadGroupRecord struct {
 	SampleID
 }
 
+// DecodeFrom implements the Record.DecodeFrom method.
 func (rr *ReadGroupRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	rr.RecordHeader = raw.Header
 	f := raw.fields()
@@ -726,6 +735,7 @@ type SampleRecord struct {
 	PhysicalAddress      uint64
 }
 
+// DecodeFrom implements the Record.DecodeFrom method.
 func (sr *SampleRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	sr.RecordHeader = raw.Header
 	f := raw.fields()
@@ -859,6 +869,7 @@ type SampleGroupRecord struct {
 	PhysicalAddress      uint64
 }
 
+// DecodeFrom implements the Record.DecodeFrom method.
 func (sr *SampleGroupRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	sr.RecordHeader = raw.Header
 	f := raw.fields()
@@ -951,6 +962,7 @@ func (sr *SampleGroupRecord) ExactIP() bool {
 	return sr.RecordHeader.Misc&exactIPBit != 0
 }
 
+// BranchEntry is a sampled branch.
 type BranchEntry struct {
 	From             uint64
 	To               uint64
@@ -975,8 +987,10 @@ func (be *BranchEntry) decode(from, to, entry uint64) {
 	}
 }
 
+// BranchType classifies a BranchEntry.
 type BranchType uint8
 
+// Branch classifications.
 const (
 	BranchTypeUnknown BranchType = iota
 	BranchTypeConditional
@@ -1011,6 +1025,7 @@ type Mmap2Record struct {
 	SampleID
 }
 
+// DecodeFrom implements the Record.DecodeFrom method.
 func (mr *Mmap2Record) DecodeFrom(raw *RawRecord, ev *Event) {
 	mr.RecordHeader = raw.Header
 	f := raw.fields()
@@ -1053,6 +1068,7 @@ const (
 	AuxCollision AuxFlag = 0x08 // sample collided with another
 )
 
+// DecodeFrom implements the Record.DecodeFrom method.
 func (ar *AuxRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	ar.RecordHeader = raw.Header
 	f := raw.fields()
@@ -1074,6 +1090,7 @@ type ItraceStartRecord struct {
 	SampleID
 }
 
+// DecodeFrom implements the Record.DecodeFrom method.
 func (ir *ItraceStartRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	ir.RecordHeader = raw.Header
 	f := raw.fields()
@@ -1090,6 +1107,7 @@ type LostSamplesRecord struct {
 	SampleID
 }
 
+// DecodeFrom implements the Record.DecodeFrom method.
 func (lr *LostSamplesRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	lr.RecordHeader = raw.Header
 	f := raw.fields()
@@ -1104,6 +1122,7 @@ type SwitchRecord struct {
 	SampleID
 }
 
+// DecodeFrom implements the Record.DecodeFrom method.
 func (sr *SwitchRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	sr.RecordHeader = raw.Header
 	f := raw.fields()
@@ -1137,6 +1156,7 @@ type SwitchCPUWideRecord struct {
 	SampleID
 }
 
+// DecodeFrom implements the Record.DecodeFrom method.
 func (sr *SwitchCPUWideRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	sr.RecordHeader = raw.Header
 	f := raw.fields()
@@ -1170,6 +1190,7 @@ type NamespacesRecord struct {
 
 // TODO(acln): check out *_NS_INDEX in perf_event.h
 
+// DecodeFrom implements the Record.DecodeFrom method.
 func (nr *NamespacesRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	nr.RecordHeader = raw.Header
 	f := raw.fields()
