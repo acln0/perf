@@ -306,26 +306,22 @@ func testPollDisabledByExit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var rec1, rec2 perf.Record
-	var err1, err2 error
-	done := make(chan struct{})
-
-	go func() {
-		timeout := 100 * time.Millisecond
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
-		defer cancel()
-		// Read two records. The first one should be valid,
-		// the second one should not, and the second error
-		// should be ErrDisabled.
-		rec1, err1 = getpid.ReadRecord(ctx)
-		rec2, err2 = getpid.ReadRecord(ctx)
-		close(done)
-	}()
-
 	// Signal to the child that it should call getpid now.
+	// It will call getpid, then exit.
 	evsig(startevfd)
+	if err := cmd.Wait(); err != nil {
+		t.Fatal(err)
+	}
 
-	<-done
+	// Read two records. The first one should be valid,
+	// the second one should not, and the second error
+	// should be ErrDisabled.
+	timeout := 100 * time.Millisecond
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	rec1, err1 := getpid.ReadRecord(ctx)
+	rec2, err2 := getpid.ReadRecord(ctx)
+
 	if err1 != nil {
 		t.Errorf("first error was %v, want nil", err1)
 	}
@@ -337,14 +333,12 @@ func testPollDisabledByExit(t *testing.T) {
 		t.Errorf("first record: got pid %d in the sample, want %d",
 			sr.Pid, cmd.Process.Pid)
 	}
+
 	if err2 != perf.ErrDisabled {
 		t.Errorf("second record: error was %v, want ErrDisabled", err2)
 	}
 	if rec2 != nil {
 		t.Errorf("second record: got %#v, want nil", rec2)
-	}
-	if err := cmd.Wait(); err != nil {
-		t.Fatal(err)
 	}
 }
 
@@ -621,24 +615,15 @@ func testComm(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var rec perf.Record
-	var rerr error
-	done := make(chan struct{})
-
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
-		defer cancel()
-		rec, rerr = comm.ReadRecord(ctx)
-		close(done)
-	}()
-
-	// Signal to the child that it should change its name now.
+	// Signal to the child that it should change its name.
 	evsig(startevfd)
 
-	// Observe the CommRecord.
-	<-done
+	// Read the CommRecord.
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	rec, rerr := comm.ReadRecord(ctx)
 
-	// Tell the child that it's safe to exit now.
+	// Signal to the child that it should exit, and wait for it to do so.
 	evsig(sawcommevfd)
 	if err := cmd.Wait(); err != nil {
 		t.Fatal(err)
