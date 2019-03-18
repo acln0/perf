@@ -18,10 +18,15 @@ type Group struct {
 	// Options configures options for all events in the group.
 	Options Options
 
+	// ClockID configures the clock for samples in the group.
+	ClockID int32
+
 	err             error // sticky configuration error
 	attrs           []*Attr
 	leaderNeedsRing bool
 }
+
+// TODO(acln): what other fields belong on Group? SampleFormat perhaps?
 
 // Add adds events to the group, as configured by cfgs.
 //
@@ -38,17 +43,19 @@ func (g *Group) add(cfg Configurator) {
 	if g.err != nil {
 		return
 	}
-	attr := new(Attr)
-	attr.Options = g.Options
-	err := cfg.Configure(attr)
+	a := new(Attr)
+	a.CountFormat = g.CountFormat
+	a.Options = g.Options
+	a.ClockID = g.ClockID
+	err := cfg.Configure(a)
 	if err != nil {
 		g.err = err
 		return
 	}
-	if attr.Sample != 0 {
+	if a.Sample != 0 {
 		g.leaderNeedsRing = true
 	}
-	g.attrs = append(g.attrs, attr)
+	g.attrs = append(g.attrs, a)
 }
 
 // Open opens all the events in the group, and returns their leader.
@@ -64,7 +71,6 @@ func (g *Group) Open(pid int, cpu int) (*Event, error) {
 		return nil, fmt.Errorf("perf: configuration error: %v", g.err)
 	}
 	leaderattr := g.attrs[0]
-	leaderattr.CountFormat = g.CountFormat
 	leaderattr.CountFormat.Group = true
 	leader, err := Open(leaderattr, pid, cpu, nil)
 	if err != nil {
