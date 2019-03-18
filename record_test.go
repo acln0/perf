@@ -176,7 +176,7 @@ func testPollCancel(t *testing.T) {
 }
 
 func testPollExpired(t *testing.T) {
-	requires(t, softwarePMU)
+	requires(t, paranoid(1), softwarePMU)
 
 	da := new(perf.Attr)
 	perf.Dummy.Configure(da)
@@ -544,7 +544,7 @@ func init() {
 }
 
 func testComm(t *testing.T) {
-	requires(t, softwarePMU)
+	requires(t, paranoid(1), softwarePMU)
 
 	// Re-exec ourselves with PERF_TEST_COMM=1.
 	self, err := os.Executable()
@@ -673,7 +673,7 @@ func init() {
 }
 
 func testExit(t *testing.T) {
-	requires(t, softwarePMU)
+	requires(t, paranoid(1), softwarePMU)
 
 	// Re-exec ourselves with PERF_TEST_EXIT=1.
 	self, err := os.Executable()

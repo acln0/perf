@@ -95,6 +95,8 @@ func testOpenPopulatesLabel(t *testing.T) {
 }
 
 func testEventIDsDifferentByCPU(t *testing.T) {
+	requires(t, paranoid(1))
+
 	if runtime.NumCPU() == 1 {
 		t.Skip("only one CPU")
 	}

@@ -119,6 +119,7 @@ func testHardwareCacheCounters(t *testing.T) {
 
 	t.Run("L1DataMissesBadLocality", testL1DataMissesBadLocality)
 	t.Run("L1DataMissesGoodLocality", testL1DataMissesGoodLocality)
+	t.Run("L1Group", testL1Group)
 }
 
 func testL1DataMissesBadLocality(t *testing.T) {
@@ -209,6 +210,71 @@ func testL1DataMissesGoodLocality(t *testing.T) {
 	}
 
 	t.Logf("good locality: got %d L1 data cache misses", c.Value)
+}
+
+type l1testIdentity int
+
+func (v l1testIdentity) value() int { return int(v) }
+
+type l1testSquare int
+
+func (v l1testSquare) value() int { return int(v * v) }
+
+type l1testCube int
+
+func (v l1testCube) value() int { return int(v * v * v) }
+
+type valuer interface {
+	value() int
+}
+
+func newValuer(n int) valuer {
+	switch n % 3 {
+	case 0:
+		return l1testIdentity(n)
+	case 1:
+		return l1testSquare(n)
+	default:
+		return l1testCube(n)
+	}
+}
+
+func testL1Group(t *testing.T) {
+	caches := []perf.Cache{perf.L1D, perf.L1I}
+	ops := []perf.CacheOp{perf.Read}
+	results := []perf.CacheOpResult{perf.Miss}
+
+	var g perf.Group
+	g.Add(perf.HardwareCacheCounters(caches, ops, results)...)
+
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	l1, err := g.Open(perf.CallingThread, perf.AnyCPU)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l1.Close()
+
+	const n = 100000
+
+	valuers := make([]valuer, 0, n)
+	for i := 0; i < n; i++ {
+		valuers = append(valuers, newValuer(i))
+	}
+
+	sum := 0
+	gc, err := l1.MeasureGroup(func() {
+		for i := 0; i < n; i++ {
+			sum += valuers[i].value()
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Logf("got %d L1 data cache misses, %d L1 instruction cache misses",
+		gc.Values[0].Value, gc.Values[1].Value)
 }
 
 func testSingleTracepoint(t *testing.T) {

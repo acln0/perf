@@ -103,8 +103,7 @@ func ExampleTracepoint_getpid() {
 		log.Fatal(err)
 	}
 
-	fmt.Printf("saw getpid %d times\n", c.Value)
-	// Output: saw getpid 3 times
+	fmt.Printf("saw getpid %d times\n", c.Value) // should print 3
 }
 
 func ExampleMmapRecord_plugin() {
