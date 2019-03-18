@@ -20,8 +20,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// TODO(acln): the paranoid requirement is not specified for most of these
-
 // TODO(acln): a test for the case when a record straddles the head of the
 // ring is missing. See readRawRecordNonblock.
 
@@ -44,7 +42,7 @@ func testPoll(t *testing.T) {
 }
 
 func testPollTimeout(t *testing.T) {
-	requires(t, tracepointPMU, debugfs)
+	requires(t, paranoid(1), tracepointPMU, debugfs)
 
 	ga := new(perf.Attr)
 	ga.SetSamplePeriod(1)
@@ -111,7 +109,7 @@ func testPollTimeout(t *testing.T) {
 }
 
 func testPollCancel(t *testing.T) {
-	requires(t, tracepointPMU, debugfs)
+	requires(t, paranoid(1), tracepointPMU, debugfs)
 
 	ga := new(perf.Attr)
 	ga.SetSamplePeriod(1)
@@ -243,7 +241,7 @@ func init() {
 }
 
 func testPollDisabledByExit(t *testing.T) {
-	requires(t, tracepointPMU, debugfs)
+	requires(t, paranoid(1), tracepointPMU, debugfs)
 
 	// Re-exec ourselves with PERF_TEST_ERR_DISABLED=1.
 	self, err := os.Executable()
@@ -346,7 +344,7 @@ func testPollDisabledByExit(t *testing.T) {
 }
 
 func testPollDisabledExplicitly(t *testing.T) {
-	requires(t, tracepointPMU, debugfs)
+	requires(t, paranoid(1), tracepointPMU, debugfs)
 
 	ga := &perf.Attr{
 		SampleFormat: perf.SampleFormat{
@@ -428,7 +426,7 @@ func testPollDisabledByRefresh(t *testing.T) {
 	// If we ever figure out how to observe a HUP there, we should
 	// make ReadRawRecord return ErrDisabled. In the meantime, leave
 	// things as-is.
-	requires(t, tracepointPMU, debugfs)
+	requires(t, paranoid(1), tracepointPMU, debugfs)
 
 	ga := &perf.Attr{
 		SampleFormat: perf.SampleFormat{
@@ -915,7 +913,7 @@ func testCPUWideSwitch(t *testing.T) {
 }
 
 func testSampleGetpid(t *testing.T) {
-	requires(t, tracepointPMU, debugfs)
+	requires(t, paranoid(1), tracepointPMU, debugfs)
 
 	ga := &perf.Attr{
 		SampleFormat: perf.SampleFormat{
@@ -966,7 +964,7 @@ func testSampleGetpid(t *testing.T) {
 }
 
 func testSampleGetpidConcurrent(t *testing.T) {
-	requires(t, tracepointPMU, debugfs)
+	requires(t, paranoid(1), tracepointPMU, debugfs)
 
 	ga := &perf.Attr{
 		SampleFormat: perf.SampleFormat{
@@ -1031,7 +1029,7 @@ func testSampleGetpidConcurrent(t *testing.T) {
 }
 
 func testSampleTracepointStack(t *testing.T) {
-	requires(t, tracepointPMU, debugfs)
+	requires(t, paranoid(1), tracepointPMU, debugfs)
 
 	ga := &perf.Attr{
 		Options: perf.Options{
@@ -1128,7 +1126,7 @@ func testSampleTracepointStack(t *testing.T) {
 }
 
 func testRedirectManualWire(t *testing.T) {
-	requires(t, tracepointPMU, debugfs)
+	requires(t, paranoid(1), tracepointPMU, debugfs)
 
 	ga := &perf.Attr{
 		SampleFormat: perf.SampleFormat{
