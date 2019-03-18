@@ -22,6 +22,9 @@ import (
 
 // TODO(acln): the paranoid requirement is not specified for most of these
 
+// TODO(acln): a test for the case when a record straddles the head of the
+// ring is missing. See readRawRecordNonblock.
+
 func TestReadRecord(t *testing.T) {
 	t.Run("Poll", testPoll)
 	t.Run("Comm", testComm)
