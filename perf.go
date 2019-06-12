@@ -1235,6 +1235,7 @@ func (f *fields) uint32sizeBytes(b *[]byte) {
 	f.advance(4)
 	data := make([]byte, size)
 	copy(data, *f)
+	*b = data
 	f.advance(int(size))
 }
 
@@ -1243,6 +1244,7 @@ func (f *fields) uint64sizeBytes(b *[]byte) {
 	f.advance(8)
 	data := make([]byte, size)
 	copy(data, *f)
+	*b = data
 	f.advance(int(size))
 }
 
