@@ -42,9 +42,9 @@ func TestCommandGroup(t *testing.T) {
 		Running: true,
 		ID:      true,
 	}
-	g.Add(perf.Instructions, perf.CPUCycles)
 	g.Options.ExcludeKernel = true
 	g.Options.ExcludeHypervisor = true
+	g.Add(perf.Instructions, perf.CPUCycles)
 
 	counts, err := g.Command(cmd, perf.AnyCPU)
 	if err != nil {
