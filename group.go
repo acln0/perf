@@ -64,11 +64,11 @@ func (g *Group) add(cfg Configurator) {
 // ReadGroupCount method when reading counters from it. Closing it closes
 // the entire group.
 func (g *Group) Open(pid int, cpu int) (*Event, error) {
-	if len(g.attrs) == 0 {
-		return nil, errors.New("perf: empty event group")
-	}
 	if g.err != nil {
 		return nil, fmt.Errorf("perf: configuration error: %v", g.err)
+	}
+	if len(g.attrs) == 0 {
+		return nil, errors.New("perf: empty event group")
 	}
 	leaderattr := g.attrs[0]
 	leaderattr.CountFormat.Group = true
