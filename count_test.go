@@ -93,15 +93,20 @@ func testPageFaults(t *testing.T) {
 	}
 	defer faults.Close()
 
-	runtime.GC()
+	f, cleanup := newPageFaultTestFile(t)
+	defer cleanup()
 
+	dropVMCache(t)
+
+	var b byte
 	c, err := faults.Measure(func() {
-		fault = make([]byte, 64*1024*1024)
-		fault[0] = 1
-		fault[63*1024*1024] = 1
+		b = f[len(f)-7]
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if b != 'x' {
+		t.Fatalf("saw %v, want %v", b, 'x')
 	}
 	if c.Value == 0 {
 		t.Fatal("didn't see a page fault")
@@ -353,16 +358,22 @@ func testIoctlAndCountIDsMatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer faults.Close()
 
-	runtime.GC()
+	f, cleanup := newPageFaultTestFile(t)
+	defer cleanup()
 
+	dropVMCache(t)
+
+	var b byte
 	c, err := faults.Measure(func() {
-		fault = make([]byte, 64*1024*1024)
-		fault[0] = 1
-		fault[63*1024*1024] = 1
+		b = f[len(f)-7]
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if b != 'x' {
+		t.Fatalf("saw %v, want %v", b, 'x')
 	}
 	if c.Value == 0 {
 		t.Fatal("didn't see a page fault")
@@ -399,4 +410,57 @@ func writeTrigger() {
 	if _, err := null.Write([]byte("big data")); err != nil {
 		panic(err)
 	}
+}
+
+func newPageFaultTestFile(t *testing.T) (mem []byte, cleanup func()) {
+	t.Helper()
+
+	f, err := os.OpenFile("pf", os.O_CREATE|os.O_EXCL|os.O_RDWR, 0200)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	size := 3 * unix.Getpagesize()
+
+	data := make([]byte, size)
+	for i := range data {
+		data[i] = 'x'
+	}
+
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		os.Remove(f.Name())
+		t.Fatal(err)
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		os.Remove(f.Name())
+		t.Fatal(err)
+	}
+
+	m, err := unix.Mmap(int(f.Fd()), 0, size, unix.PROT_READ, unix.MAP_PRIVATE)
+	if err != nil {
+		f.Close()
+		os.Remove(f.Name())
+		t.Fatal(err)
+	}
+
+	return m, func() {
+		unix.Munmap(m)
+		f.Close()
+		os.Remove(f.Name())
+	}
+}
+
+func dropVMCache(t *testing.T) {
+	t.Helper()
+
+	f, err := os.OpenFile("/proc/sys/vm/drop_caches", os.O_WRONLY, 0200)
+	if err != nil {
+		t.Fatalf("failed to drop VM cache: %v", err)
+	}
+	if _, err := f.WriteString("3"); err != nil {
+		t.Fatalf("failed to write magic value: %v", err)
+	}
+	f.Close()
 }
