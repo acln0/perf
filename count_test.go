@@ -459,8 +459,9 @@ func dropVMCache(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to drop VM cache: %v", err)
 	}
+	defer f.Close()
+
 	if _, err := f.WriteString("3"); err != nil {
 		t.Fatalf("failed to write magic value: %v", err)
 	}
-	f.Close()
 }
