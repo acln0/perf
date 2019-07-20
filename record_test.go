@@ -1098,7 +1098,7 @@ func testSampleTracepointStack(t *testing.T) {
 		gopc := pcs[i]
 		kpc := getpidsample.Callchain[j]
 		if gopc != uintptr(kpc) {
-			t.Fatalf("Go (%#x) and kernel (%#x) PC differ", gopc, kpc)
+			t.Errorf("Go (%#x) and kernel (%#x) PC differ", gopc, kpc)
 		}
 		i--
 		j--
