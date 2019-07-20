@@ -1,10 +1,9 @@
-#include "textflag.h"
-
 #define SYS_IOCTL 16
 #define PERF_EVENT_IOC_ENABLE  0x2400
 #define PERF_EVENT_IOC_DISABLE 0x2401
 
-TEXT ·doEnableRunDisable(SB),NOSPLIT,$0-16
+TEXT ·doEnableRunDisable(SB),0,$0-16
+
   MOVQ fd+0(FP), DI
   MOVQ $PERF_EVENT_IOC_ENABLE, SI
   MOVQ $SYS_IOCTL, AX
