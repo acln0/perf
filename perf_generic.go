@@ -3,6 +3,8 @@
 package perf
 
 import (
+	"syscall"
+
 	"golang.org/x/sys/unix"
 )
 
@@ -11,7 +13,11 @@ import (
 // overhead. It is assumed that perfFD is known to be a valid file descriptor at
 // the time of the call, no error checking occurs.
 func doEnableRunDisable(fd uintptr, f func()) {
-	unix.Syscall(unix.SYS_IOCTL, fd, uintptr(unix.PERF_EVENT_IOC_ENABLE), 0)
+	// syscall.RawSyscall is the most economic way we can do this
+	// generically. It's one branch less than unix.RawSyscall, and many
+	// instructions less than the generic unix.Syscall, which must notify
+	// the runtime by eventually calling runtime.{enter,exit}syscall.
+	syscall.RawSyscall(unix.SYS_IOCTL, fd, uintptr(unix.PERF_EVENT_IOC_ENABLE), 0)
 	f()
-	unix.Syscall(unix.SYS_IOCTL, fd, uintptr(unix.PERF_EVENT_IOC_DISABLE), 0)
+	syscall.RawSyscall(unix.SYS_IOCTL, fd, uintptr(unix.PERF_EVENT_IOC_DISABLE), 0)
 }
