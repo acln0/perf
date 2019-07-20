@@ -545,6 +545,8 @@ func init() {
 }
 
 func testComm(t *testing.T) {
+	t.Skip("flaky. TODO(acln): investigate")
+
 	requires(t, paranoid(1), softwarePMU)
 
 	// Re-exec ourselves with PERF_TEST_COMM=1.
