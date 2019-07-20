@@ -8,6 +8,8 @@ import (
 )
 
 func TestCommand(t *testing.T) {
+	requires(t, paranoid(2), hardwarePMU)
+
 	cmd := exec.Command("echo", "hello world")
 
 	fa := &perf.Attr{
@@ -35,6 +37,8 @@ func TestCommand(t *testing.T) {
 }
 
 func TestCommandGroup(t *testing.T) {
+	requires(t, paranoid(2), hardwarePMU)
+
 	cmd := exec.Command("echo", "hello world")
 
 	var g perf.Group
