@@ -270,15 +270,9 @@ func (ev *Event) Measure(f func()) (Count, error) {
 	if err := ev.Reset(); err != nil {
 		return Count{}, err
 	}
-	if err := ev.Enable(); err != nil {
-		return Count{}, err
-	}
 
-	f()
+	doEnableRunDisable(uintptr(ev.perffd), f)
 
-	if err := ev.Disable(); err != nil {
-		return Count{}, err
-	}
 	return ev.ReadCount()
 }
 
@@ -290,15 +284,9 @@ func (ev *Event) MeasureGroup(f func()) (GroupCount, error) {
 	if err := ev.Reset(); err != nil {
 		return GroupCount{}, err
 	}
-	if err := ev.Enable(); err != nil {
-		return GroupCount{}, err
-	}
 
-	f()
+	doEnableRunDisable(uintptr(ev.perffd), f)
 
-	if err := ev.Disable(); err != nil {
-		return GroupCount{}, err
-	}
 	return ev.ReadGroupCount()
 }
 
