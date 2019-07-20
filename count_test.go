@@ -93,20 +93,14 @@ func testPageFaults(t *testing.T) {
 	}
 	defer faults.Close()
 
-	f, cleanup := newPageFaultTestFile(t)
+	mapping, cleanup := newMapping(t)
 	defer cleanup()
 
-	dropVMCache(t)
-
-	var b byte
 	c, err := faults.Measure(func() {
-		b = f[len(f)-7]
+		mapping[0] = 1
 	})
 	if err != nil {
 		t.Fatal(err)
-	}
-	if b != 'x' {
-		t.Fatalf("saw %v, want %v", b, 'x')
 	}
 	if c.Value == 0 {
 		t.Fatal("didn't see a page fault")
@@ -360,20 +354,14 @@ func testIoctlAndCountIDsMatch(t *testing.T) {
 	}
 	defer faults.Close()
 
-	f, cleanup := newPageFaultTestFile(t)
+	mapping, cleanup := newMapping(t)
 	defer cleanup()
 
-	dropVMCache(t)
-
-	var b byte
 	c, err := faults.Measure(func() {
-		b = f[len(f)-7]
+		mapping[0] = 1
 	})
 	if err != nil {
 		t.Fatal(err)
-	}
-	if b != 'x' {
-		t.Fatalf("saw %v, want %v", b, 'x')
 	}
 	if c.Value == 0 {
 		t.Fatal("didn't see a page fault")
@@ -412,56 +400,14 @@ func writeTrigger() {
 	}
 }
 
-func newPageFaultTestFile(t *testing.T) (mem []byte, cleanup func()) {
+// newMapping maps a single anonymous page for READ/WRITE.
+func newMapping(t *testing.T) (mem []byte, cleanup func()) {
 	t.Helper()
 
-	f, err := os.OpenFile("pf", os.O_CREATE|os.O_EXCL|os.O_RDWR, 0200)
+	m, err := unix.Mmap(0, 0, 4096, unix.PROT_READ|unix.PROT_WRITE, unix.MAP_PRIVATE|unix.MAP_ANONYMOUS)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	size := 3 * unix.Getpagesize()
-
-	data := make([]byte, size)
-	for i := range data {
-		data[i] = 'x'
-	}
-
-	if _, err := f.Write(data); err != nil {
-		f.Close()
-		os.Remove(f.Name())
-		t.Fatal(err)
-	}
-	if err := f.Sync(); err != nil {
-		f.Close()
-		os.Remove(f.Name())
-		t.Fatal(err)
-	}
-
-	m, err := unix.Mmap(int(f.Fd()), 0, size, unix.PROT_READ, unix.MAP_PRIVATE)
-	if err != nil {
-		f.Close()
-		os.Remove(f.Name())
-		t.Fatal(err)
-	}
-
-	return m, func() {
-		unix.Munmap(m)
-		f.Close()
-		os.Remove(f.Name())
-	}
-}
-
-func dropVMCache(t *testing.T) {
-	t.Helper()
-
-	f, err := os.OpenFile("/proc/sys/vm/drop_caches", os.O_WRONLY, 0200)
-	if err != nil {
-		t.Fatalf("failed to drop VM cache: %v", err)
-	}
-	defer f.Close()
-
-	if _, err := f.WriteString("3"); err != nil {
-		t.Fatalf("failed to write magic value: %v", err)
-	}
+	return m, func() { unix.Munmap(m) }
 }
