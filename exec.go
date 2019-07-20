@@ -61,10 +61,10 @@ func Command(a *Attr, cmd *exec.Cmd, cpu int, event *Event) (Count, error) {
 	err := command(cmd, func() (err2 error) {
 		event2, err2 = Open(a, cmd.Process.Pid, cpu, event)
 		if err2 != nil {
-			event2.Enable()
+			return err2
 		}
 
-		return err2
+		return event2.Enable()
 	})
 	if err != nil {
 		return Count{}, err
@@ -81,10 +81,10 @@ func (g *Group) Command(cmd *exec.Cmd, cpu int) (GroupCount, error) {
 	err := command(cmd, func() (err2 error) {
 		event2, err2 = g.Open(cmd.Process.Pid, cpu)
 		if err2 != nil {
-			event2.Enable()
+			return err2
 		}
 
-		return err2
+		return event2.Enable()
 	})
 	if err != nil {
 		return GroupCount{}, err
