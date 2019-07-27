@@ -27,6 +27,9 @@ var ErrDisabled = errors.New("perf: event disabled")
 // events. See also (*Event).SetOutput.
 var ErrNoReadRecord = errors.New("perf: ReadRecord disabled")
 
+// ErrBadRecord is returned by ReadRecord when a read record can't be decoded.
+var ErrBadRecord = errors.New("bad record received")
+
 // ReadRecord reads and decodes a record from the ring buffer associated
 // with ev.
 //
@@ -52,7 +55,9 @@ func (ev *Event) ReadRecord(ctx context.Context) (Record, error) {
 	if err != nil {
 		return nil, err
 	}
-	rec.DecodeFrom(&raw, ev)
+	if err := rec.DecodeFrom(&raw, ev); err != nil {
+		return nil, err
+	}
 	return rec, nil
 }
 
@@ -171,6 +176,12 @@ again:
 	}
 }
 
+func (ev *Event) resetRing() {
+	// BUG!
+	fmt.Fprintf(os.Stderr, "BUG: The ring buffer wrapped! Discarding")
+	atomic.StoreUint64(&ev.meta.Data_tail, atomic.LoadUint64(&ev.meta.Data_head))
+}
+
 // readRawRecordNonblock reads a raw record into rec, if one is available.
 // Callers must not retain rec.Data. The boolean return value signals whether
 // a record was actually found / written to rec.
@@ -181,26 +192,41 @@ func (ev *Event) readRawRecordNonblock(raw *RawRecord) bool {
 		return false
 	}
 
+	const headerSize = uint64(unsafe.Sizeof(RecordHeader{}))
+	avail := head - tail
+	if avail < headerSize {
+		ev.resetRing()
+		return false
+	}
+
 	// Head and tail values only ever grow, so we must take their value
 	// modulo the size of the data segment of the ring.
 	start := tail % uint64(len(ev.ringdata))
 	raw.Header = *(*RecordHeader)(unsafe.Pointer(&ev.ringdata[start]))
 	end := (tail + uint64(raw.Header.Size)) % uint64(len(ev.ringdata))
 
+	msgLen := uint64(raw.Header.Size)
+	if avail < msgLen || msgLen < headerSize {
+		ev.resetRing()
+		return false
+	}
+
+	// Reserve space to store this record out of the ring.
+	if uint64(len(ev.recordBuffer)) < msgLen {
+		ev.recordBuffer = make([]byte, msgLen)
+	}
 	// If the record wraps around the ring, we must allocate storage,
 	// so that we can return a contiguous area of memory to the caller.
-	var data []byte
 	if end < start {
-		data = make([]byte, raw.Header.Size)
-		n := copy(data, ev.ringdata[start:])
-		copy(data[n:], ev.ringdata[:int(raw.Header.Size)-n])
+		n := copy(ev.recordBuffer, ev.ringdata[start:])
+		copy(ev.recordBuffer[n:], ev.ringdata[:int(raw.Header.Size)-n])
 	} else {
-		data = ev.ringdata[start:end]
+		copy(ev.recordBuffer, ev.ringdata[start:end])
 	}
-	raw.Data = data[unsafe.Sizeof(raw.Header):]
+	raw.Data = ev.recordBuffer[unsafe.Sizeof(raw.Header):msgLen]
 
 	// Notify the kernel of the last record we've seen.
-	atomic.AddUint64(&ev.meta.Data_tail, uint64(raw.Header.Size))
+	atomic.AddUint64(&ev.meta.Data_tail, msgLen)
 	return true
 }
 
@@ -389,7 +415,7 @@ type SampleID struct {
 // Record is the interface implemented by all record types.
 type Record interface {
 	Header() RecordHeader
-	DecodeFrom(*RawRecord, *Event)
+	DecodeFrom(*RawRecord, *Event) error
 }
 
 // RecordType is the type of an overflow record.
@@ -520,7 +546,7 @@ type MmapRecord struct {
 }
 
 // DecodeFrom implements the Record.DecodeFrom method.
-func (mr *MmapRecord) DecodeFrom(raw *RawRecord, ev *Event) {
+func (mr *MmapRecord) DecodeFrom(raw *RawRecord, ev *Event) error {
 	mr.RecordHeader = raw.Header
 	f := raw.fields()
 	f.uint32(&mr.Pid, &mr.Tid)
@@ -529,6 +555,7 @@ func (mr *MmapRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	f.uint64(&mr.PageOffset)
 	f.string(&mr.Filename)
 	f.idCond(ev.a.Options.SampleIDAll, &mr.SampleID, ev.a.SampleFormat)
+	return nil
 }
 
 // Executable returns a boolean indicating whether the mapping is executable.
@@ -546,12 +573,13 @@ type LostRecord struct {
 }
 
 // DecodeFrom implements the Record.DecodeFrom method.
-func (lr *LostRecord) DecodeFrom(raw *RawRecord, ev *Event) {
+func (lr *LostRecord) DecodeFrom(raw *RawRecord, ev *Event) error {
 	lr.RecordHeader = raw.Header
 	f := raw.fields()
 	f.uint64(&lr.ID)
 	f.uint64(&lr.Lost)
 	f.idCond(ev.a.Options.SampleIDAll, &lr.SampleID, ev.a.SampleFormat)
+	return nil
 }
 
 // CommRecord (PERF_RECORD_COMM) indicates a change in the process name.
@@ -564,12 +592,13 @@ type CommRecord struct {
 }
 
 // DecodeFrom implements the Record.DecodeFrom method.
-func (cr *CommRecord) DecodeFrom(raw *RawRecord, ev *Event) {
+func (cr *CommRecord) DecodeFrom(raw *RawRecord, ev *Event) error {
 	cr.RecordHeader = raw.Header
 	f := raw.fields()
 	f.uint32(&cr.Pid, &cr.Tid)
 	f.string(&cr.NewName)
 	f.idCond(ev.a.Options.SampleIDAll, &cr.SampleID, ev.a.SampleFormat)
+	return nil
 }
 
 // commExecBit is PERF_RECORD_MISC_COMM_EXEC
@@ -593,13 +622,14 @@ type ExitRecord struct {
 }
 
 // DecodeFrom implements the Record.DecodeFrom method.
-func (er *ExitRecord) DecodeFrom(raw *RawRecord, ev *Event) {
+func (er *ExitRecord) DecodeFrom(raw *RawRecord, ev *Event) error {
 	er.RecordHeader = raw.Header
 	f := raw.fields()
 	f.uint32(&er.Pid, &er.Ppid)
 	f.uint32(&er.Tid, &er.Ptid)
 	f.uint64(&er.Time)
 	f.idCond(ev.a.Options.SampleIDAll, &er.SampleID, ev.a.SampleFormat)
+	return nil
 }
 
 // ThrottleRecord (PERF_RECORD_THROTTLE) indicates a throttle event.
@@ -612,13 +642,14 @@ type ThrottleRecord struct {
 }
 
 // DecodeFrom implements the Record.DecodeFrom method.
-func (tr *ThrottleRecord) DecodeFrom(raw *RawRecord, ev *Event) {
+func (tr *ThrottleRecord) DecodeFrom(raw *RawRecord, ev *Event) error {
 	tr.RecordHeader = raw.Header
 	f := raw.fields()
 	f.uint64(&tr.Time)
 	f.uint64(&tr.ID)
 	f.uint64(&tr.StreamID)
 	f.idCond(ev.a.Options.SampleIDAll, &tr.SampleID, ev.a.SampleFormat)
+	return nil
 }
 
 // UnthrottleRecord (PERF_RECORD_UNTHROTTLE) indicates an unthrottle event.
@@ -631,13 +662,14 @@ type UnthrottleRecord struct {
 }
 
 // DecodeFrom implements the Record.DecodeFrom method.
-func (ur *UnthrottleRecord) DecodeFrom(raw *RawRecord, ev *Event) {
+func (ur *UnthrottleRecord) DecodeFrom(raw *RawRecord, ev *Event) error {
 	ur.RecordHeader = raw.Header
 	f := raw.fields()
 	f.uint64(&ur.Time)
 	f.uint64(&ur.ID)
 	f.uint64(&ur.StreamID)
 	f.idCond(ev.a.Options.SampleIDAll, &ur.SampleID, ev.a.SampleFormat)
+	return nil
 }
 
 // ForkRecord (PERF_RECORD_FORK) indicates a fork event.
@@ -652,13 +684,14 @@ type ForkRecord struct {
 }
 
 // DecodeFrom implements the Record.DecodeFrom method.
-func (fr *ForkRecord) DecodeFrom(raw *RawRecord, ev *Event) {
+func (fr *ForkRecord) DecodeFrom(raw *RawRecord, ev *Event) error {
 	fr.RecordHeader = raw.Header
 	f := raw.fields()
 	f.uint32(&fr.Pid, &fr.Ppid)
 	f.uint32(&fr.Tid, &fr.Ptid)
 	f.uint64(&fr.Time)
 	f.idCond(ev.a.Options.SampleIDAll, &fr.SampleID, ev.a.SampleFormat)
+	return nil
 }
 
 // ReadRecord (PERF_RECORD_READ) indicates a read event.
@@ -671,12 +704,13 @@ type ReadRecord struct {
 }
 
 // DecodeFrom implements the Record.DecodeFrom method.
-func (rr *ReadRecord) DecodeFrom(raw *RawRecord, ev *Event) {
+func (rr *ReadRecord) DecodeFrom(raw *RawRecord, ev *Event) error {
 	rr.RecordHeader = raw.Header
 	f := raw.fields()
 	f.uint32(&rr.Pid, &rr.Tid)
 	f.count(&rr.Count, ev.a.CountFormat)
 	f.idCond(ev.a.Options.SampleIDAll, &rr.SampleID, ev.a.SampleFormat)
+	return nil
 }
 
 // ReadGroupRecord (PERF_RECORD_READ) indicates a read event on a group event.
@@ -689,12 +723,13 @@ type ReadGroupRecord struct {
 }
 
 // DecodeFrom implements the Record.DecodeFrom method.
-func (rr *ReadGroupRecord) DecodeFrom(raw *RawRecord, ev *Event) {
+func (rr *ReadGroupRecord) DecodeFrom(raw *RawRecord, ev *Event) error {
 	rr.RecordHeader = raw.Header
 	f := raw.fields()
 	f.uint32(&rr.Pid, &rr.Tid)
 	f.groupCount(&rr.GroupCount, ev.a.CountFormat)
 	f.idCond(ev.a.Options.SampleIDAll, &rr.SampleID, ev.a.SampleFormat)
+	return nil
 }
 
 // SampleRecord indicates a sample.
@@ -736,7 +771,7 @@ type SampleRecord struct {
 }
 
 // DecodeFrom implements the Record.DecodeFrom method.
-func (sr *SampleRecord) DecodeFrom(raw *RawRecord, ev *Event) {
+func (sr *SampleRecord) DecodeFrom(raw *RawRecord, ev *Event) (err error) {
 	sr.RecordHeader = raw.Header
 	f := raw.fields()
 	f.uint64Cond(ev.a.SampleFormat.Identifier, &sr.Identifier)
@@ -753,7 +788,12 @@ func (sr *SampleRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	// in order to decode the sample.
 	if ev.a.SampleFormat.StreamID {
 		if sr.StreamID != ev.id {
-			ev = ev.groupByID[sr.StreamID]
+			newev := ev.groupByID[sr.StreamID]
+			if newev == nil {
+				ev.resetRing()
+				return ErrBadRecord
+			}
+			ev = newev
 		}
 	}
 
@@ -820,6 +860,7 @@ func (sr *SampleRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 		}
 	}
 	f.uint64Cond(ev.a.SampleFormat.PhysicalAddress, &sr.PhysicalAddress)
+	return nil
 }
 
 // exactIPBit is PERF_RECORD_MISC_EXACT_IP
@@ -870,7 +911,7 @@ type SampleGroupRecord struct {
 }
 
 // DecodeFrom implements the Record.DecodeFrom method.
-func (sr *SampleGroupRecord) DecodeFrom(raw *RawRecord, ev *Event) {
+func (sr *SampleGroupRecord) DecodeFrom(raw *RawRecord, ev *Event) error {
 	sr.RecordHeader = raw.Header
 	f := raw.fields()
 	f.uint64Cond(ev.a.SampleFormat.Identifier, &sr.Identifier)
@@ -954,6 +995,7 @@ func (sr *SampleGroupRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 		}
 	}
 	f.uint64Cond(ev.a.SampleFormat.PhysicalAddress, &sr.PhysicalAddress)
+	return nil
 }
 
 // ExactIP indicates that sr.IP points to the actual instruction that
@@ -1026,7 +1068,7 @@ type Mmap2Record struct {
 }
 
 // DecodeFrom implements the Record.DecodeFrom method.
-func (mr *Mmap2Record) DecodeFrom(raw *RawRecord, ev *Event) {
+func (mr *Mmap2Record) DecodeFrom(raw *RawRecord, ev *Event) error {
 	mr.RecordHeader = raw.Header
 	f := raw.fields()
 	f.uint32(&mr.Pid, &mr.Tid)
@@ -1039,6 +1081,7 @@ func (mr *Mmap2Record) DecodeFrom(raw *RawRecord, ev *Event) {
 	f.uint32(&mr.Prot, &mr.Flags)
 	f.string(&mr.Filename)
 	f.idCond(ev.a.Options.SampleIDAll, &mr.SampleID, ev.a.SampleFormat)
+	return nil
 }
 
 // Executable returns a boolean indicating whether the mapping is executable.
@@ -1069,7 +1112,7 @@ const (
 )
 
 // DecodeFrom implements the Record.DecodeFrom method.
-func (ar *AuxRecord) DecodeFrom(raw *RawRecord, ev *Event) {
+func (ar *AuxRecord) DecodeFrom(raw *RawRecord, ev *Event) error {
 	ar.RecordHeader = raw.Header
 	f := raw.fields()
 	f.uint64(&ar.Offset)
@@ -1078,6 +1121,7 @@ func (ar *AuxRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 	f.uint64(&flag)
 	ar.Flags = AuxFlag(flag)
 	f.idCond(ev.a.Options.SampleIDAll, &ar.SampleID, ev.a.SampleFormat)
+	return nil
 }
 
 // ItraceStartRecord (PERF_RECORD_ITRACE_START) indicates which process
@@ -1091,11 +1135,12 @@ type ItraceStartRecord struct {
 }
 
 // DecodeFrom implements the Record.DecodeFrom method.
-func (ir *ItraceStartRecord) DecodeFrom(raw *RawRecord, ev *Event) {
+func (ir *ItraceStartRecord) DecodeFrom(raw *RawRecord, ev *Event) error {
 	ir.RecordHeader = raw.Header
 	f := raw.fields()
 	f.uint32(&ir.Pid, &ir.Tid)
 	f.idCond(ev.a.Options.SampleIDAll, &ir.SampleID, ev.a.SampleFormat)
+	return nil
 }
 
 // LostSamplesRecord (PERF_RECORD_LOST_SAMPLES) indicates some number of
@@ -1108,11 +1153,12 @@ type LostSamplesRecord struct {
 }
 
 // DecodeFrom implements the Record.DecodeFrom method.
-func (lr *LostSamplesRecord) DecodeFrom(raw *RawRecord, ev *Event) {
+func (lr *LostSamplesRecord) DecodeFrom(raw *RawRecord, ev *Event) error {
 	lr.RecordHeader = raw.Header
 	f := raw.fields()
 	f.uint64(&lr.Lost)
 	f.idCond(ev.a.Options.SampleIDAll, &lr.SampleID, ev.a.SampleFormat)
+	return nil
 }
 
 // SwitchRecord (PERF_RECORD_SWITCH) indicates that a context switch has
@@ -1123,10 +1169,11 @@ type SwitchRecord struct {
 }
 
 // DecodeFrom implements the Record.DecodeFrom method.
-func (sr *SwitchRecord) DecodeFrom(raw *RawRecord, ev *Event) {
+func (sr *SwitchRecord) DecodeFrom(raw *RawRecord, ev *Event) error {
 	sr.RecordHeader = raw.Header
 	f := raw.fields()
 	f.idCond(ev.a.Options.SampleIDAll, &sr.SampleID, ev.a.SampleFormat)
+	return nil
 }
 
 // switchOutBit is PERF_RECORD_MISC_SWITCH_OUT
@@ -1157,11 +1204,12 @@ type SwitchCPUWideRecord struct {
 }
 
 // DecodeFrom implements the Record.DecodeFrom method.
-func (sr *SwitchCPUWideRecord) DecodeFrom(raw *RawRecord, ev *Event) {
+func (sr *SwitchCPUWideRecord) DecodeFrom(raw *RawRecord, ev *Event) error {
 	sr.RecordHeader = raw.Header
 	f := raw.fields()
 	f.uint32(&sr.Pid, &sr.Tid)
 	f.idCond(ev.a.Options.SampleIDAll, &sr.SampleID, ev.a.SampleFormat)
+	return nil
 }
 
 // Out returns a boolean indicating whether the context switch was
@@ -1191,7 +1239,7 @@ type NamespacesRecord struct {
 // TODO(acln): check out *_NS_INDEX in perf_event.h
 
 // DecodeFrom implements the Record.DecodeFrom method.
-func (nr *NamespacesRecord) DecodeFrom(raw *RawRecord, ev *Event) {
+func (nr *NamespacesRecord) DecodeFrom(raw *RawRecord, ev *Event) error {
 	nr.RecordHeader = raw.Header
 	f := raw.fields()
 	f.uint32(&nr.Pid, &nr.Tid)
@@ -1203,6 +1251,7 @@ func (nr *NamespacesRecord) DecodeFrom(raw *RawRecord, ev *Event) {
 		f.uint64(&nr.Namespaces[i].Inode)
 	}
 	f.idCond(ev.a.Options.SampleIDAll, &nr.SampleID, ev.a.SampleFormat)
+	return nil
 }
 
 // Skid is an instruction pointer skid constraint.

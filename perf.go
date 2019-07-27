@@ -92,6 +92,11 @@ type Event struct {
 	// pollresp receives responses from the poll goroutine associated
 	// with the ring, back to ReadRawRecord.
 	pollresp chan pollresp
+
+	// recordBuffer is used as storage for records returned by ReadRecord
+	// and ReadRawRecord. This means memory for records returned from those
+	// methods will be overwritten by successive calls.
+	recordBuffer []byte
 }
 
 // Open opens the event configured by attr.
