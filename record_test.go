@@ -775,7 +775,7 @@ func testExit(t *testing.T) {
 }
 
 func testCPUWideSwitch(t *testing.T) {
-	requires(t, paranoid(1), softwarePMU)
+	requires(t, paranoid(0), softwarePMU)
 
 	var wg sync.WaitGroup
 	ready := make(chan error)
