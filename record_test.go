@@ -7,6 +7,7 @@ package perf_test
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"runtime"
@@ -224,8 +225,8 @@ func init() {
 		return
 	}
 
-	readyevfd := 3
-	startevfd := 4
+	readyevfd := os.NewFile(3, "readyevfd")
+	startevfd := os.NewFile(4, "startevfd")
 
 	// Signal to the parent that we can start.
 	evsig(readyevfd)
@@ -249,24 +250,23 @@ func testPollDisabledByExit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	readyevfd, err := unix.Eventfd(0, 0)
+	readyevfdN, err := unix.Eventfd(0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer unix.Close(readyevfd)
+	readyevfd := os.NewFile(uintptr(readyevfdN), "readyevfd")
+	defer readyevfd.Close()
 
-	startevfd, err := unix.Eventfd(0, 0)
+	startevfdN, err := unix.Eventfd(0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer unix.Close(startevfd)
+	startevfd := os.NewFile(uintptr(startevfdN), "startevfd")
+	defer startevfd.Close()
 
 	cmd := exec.Command(self)
 	cmd.Env = append(os.Environ(), errDisabledTestEnv+"=1")
-	cmd.ExtraFiles = []*os.File{
-		os.NewFile(uintptr(readyevfd), "readyevfd"),
-		os.NewFile(uintptr(startevfd), "startevfd"),
-	}
+	cmd.ExtraFiles = []*os.File{readyevfd, startevfd}
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -504,9 +504,9 @@ func init() {
 		return
 	}
 
-	readyevfd := 3
-	startevfd := 4
-	sawcommevfd := 5
+	readyevfd := os.NewFile(3, "readyevfd")
+	startevfd := os.NewFile(4, "startevfd")
+	sawcommevfd := os.NewFile(5, "sawcommevfd")
 
 	// Signal to the parent that we can start.
 	evsig(readyevfd)
@@ -540,13 +540,12 @@ func init() {
 	// this conundrum.
 	//
 	// So we live with it, but still try to make our test pass.
-	evwait(sawcommevfd)
+	// evwait(sawcommevfd)
+	_ = sawcommevfd
 	os.Exit(0)
 }
 
 func testComm(t *testing.T) {
-	t.Skip("flaky. TODO(acln): investigate")
-
 	requires(t, paranoid(1), softwarePMU)
 
 	// Re-exec ourselves with PERF_TEST_COMM=1.
@@ -555,31 +554,31 @@ func testComm(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	readyevfd, err := unix.Eventfd(0, 0)
+	readyevfdN, err := unix.Eventfd(0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer unix.Close(readyevfd)
+	readyevfd := os.NewFile(uintptr(readyevfdN), "readyevfd")
+	defer readyevfd.Close()
 
-	startevfd, err := unix.Eventfd(0, 0)
+	startevfdN, err := unix.Eventfd(0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer unix.Close(startevfd)
+	startevfd := os.NewFile(uintptr(startevfdN), "readyevfd")
+	defer startevfd.Close()
 
-	sawcommevfd, err := unix.Eventfd(0, 0)
+	sawcommevfdN, err := unix.Eventfd(0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer unix.Close(sawcommevfd)
+	sawcommevfd := os.NewFile(uintptr(sawcommevfdN), "readyevfd")
+	defer sawcommevfd.Close()
 
 	cmd := exec.Command(self)
 	cmd.Env = append(os.Environ(), commTestEnv+"=1")
-	cmd.ExtraFiles = []*os.File{
-		os.NewFile(uintptr(readyevfd), "readyevfd"),
-		os.NewFile(uintptr(startevfd), "startevfd"),
-		os.NewFile(uintptr(sawcommevfd), "sawcommevfd"),
-	}
+	cmd.ExtraFiles = []*os.File{readyevfd, startevfd, sawcommevfd}
+
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -662,8 +661,8 @@ func init() {
 		return
 	}
 
-	readyevfd := 3
-	startevfd := 4
+	readyevfd := os.NewFile(3, "readyevfd")
+	startevfd := os.NewFile(4, "startevfd")
 
 	// Signal to the parent that we can start.
 	evsig(readyevfd)
@@ -684,24 +683,23 @@ func testExit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	readyevfd, err := unix.Eventfd(0, 0)
+	readyevfdN, err := unix.Eventfd(0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer unix.Close(readyevfd)
+	readyevfd := os.NewFile(uintptr(readyevfdN), "readyevfd")
+	defer readyevfd.Close()
 
-	startevfd, err := unix.Eventfd(0, 0)
+	startevfdN, err := unix.Eventfd(0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer unix.Close(startevfd)
+	startevfd := os.NewFile(uintptr(startevfdN), "startevfd")
+	defer startevfd.Close()
 
 	cmd := exec.Command(self)
 	cmd.Env = append(os.Environ(), exitTestEnv+"=1")
-	cmd.ExtraFiles = []*os.File{
-		os.NewFile(uintptr(readyevfd), "readyevfd"),
-		os.NewFile(uintptr(startevfd), "startevfd"),
-	}
+	cmd.ExtraFiles = []*os.File{readyevfd, startevfd}
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -1228,14 +1226,20 @@ func testRedirectManualWire(t *testing.T) {
 
 // Eventfd helper functions.
 
-func evsig(fd int) {
+func evsig(fd *os.File) {
 	val := uint64(1)
 	buf := (*[8]byte)(unsafe.Pointer(&val))[:]
-	unix.Write(fd, buf)
+	_, err := fd.Write(buf)
+	if err != nil {
+		log.Panicf("evsig: %v", err)
+	}
 }
 
-func evwait(fd int) {
+func evwait(fd *os.File) {
 	var val uint64
 	buf := (*[8]byte)(unsafe.Pointer(&val))[:]
-	unix.Read(fd, buf)
+	_, err := fd.Read(buf)
+	if err != nil {
+		log.Panicf("evwait: %v", err)
+	}
 }
