@@ -130,6 +130,9 @@ again:
 		if resp.perfhup {
 			// Saw POLLHUP on ev.perffd. See also the
 			// documentation for ErrDisabled.
+			if ev.readRawRecordNonblock(raw) {
+				return nil
+			}
 			return ErrDisabled
 		}
 		if !resp.perfready {
