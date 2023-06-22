@@ -1,4 +1,4 @@
-module acln.ro/perf
+module github.com/acln0/perf
 
 go 1.12
 
