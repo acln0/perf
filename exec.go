@@ -3,6 +3,7 @@ package perf
 import (
 	"fmt"
 	"os/exec"
+	"runtime"
 	"syscall"
 )
 
@@ -12,6 +13,11 @@ func command(cmd *exec.Cmd, setupCounters func() error) error {
 	if cmd.SysProcAttr == nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
 	}
+
+	// Required by docs of syscall.SysProcAttr.Ptrace.
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
 	cmd.SysProcAttr.Ptrace = true
 
 	err := cmd.Start()
